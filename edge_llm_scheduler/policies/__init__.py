@@ -5,14 +5,18 @@
 在 TODO 标记处后续补充。
 """
 
-from .placement import PlacementPolicy, DefaultPlacement, E2Placement
+from .placement import (
+    PlacementPolicy, DefaultPlacement, E2Placement, CapabilityPlacement,
+)
 from .migration import MigrationPolicy, DefaultMigration, PriorityMigration, MigrationPlan
-from .reparallelization import ReparallelizationPolicy, DefaultReparallelization
-from .recovery import RecoveryPolicy, DefaultRecovery
+from .reparallelization import (
+    ReparallelizationPolicy, DefaultReparallelization, CapabilityReparallelization,
+)
+from .recovery import RecoveryPolicy, DefaultRecovery, TokenRecovery
 
 __all__ = [
-    "PlacementPolicy", "DefaultPlacement", "E2Placement",
+    "PlacementPolicy", "DefaultPlacement", "E2Placement", "CapabilityPlacement",
     "MigrationPolicy", "DefaultMigration", "PriorityMigration", "MigrationPlan",
-    "ReparallelizationPolicy", "DefaultReparallelization",
-    "RecoveryPolicy", "DefaultRecovery",
+    "ReparallelizationPolicy", "DefaultReparallelization", "CapabilityReparallelization",
+    "RecoveryPolicy", "DefaultRecovery", "TokenRecovery",
 ]

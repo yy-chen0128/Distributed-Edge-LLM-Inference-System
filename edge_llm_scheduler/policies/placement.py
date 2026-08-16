@@ -213,3 +213,44 @@ class E2Placement(PlacementPolicy):
             return base + min(1.0, evict / (max(evict_cost.values()) + 1e-9)) if evict_cost else base
 
         return min(nodes, key=total_cost)
+
+
+class CapabilityPlacement(PlacementPolicy):
+    """按节点能力加权路由：算力强的节点多承担（性能目标：木桶效应最小化）。
+
+    决策：选"有效利用率最低"的节点——即 (负载 / 能力权重) 最小。
+    能力权重 = compute_flops / 集群平均算力。算力 2× 的节点，同样负载下"更闲"。
+
+    比纯负载均衡好：异构集群里，负载相同但算力不同时，该把请求给算力强的。
+    """
+
+    async def place(
+        self,
+        model,
+        nodes: List[Node],
+        request: InferenceRequest,
+        storage: Optional[KVStore] = None,
+        hit_tokens: int = 0,
+    ) -> List[Task]:
+        if not nodes:
+            return []
+        alive = [n for n in nodes if n.state.alive]
+        if not alive:
+            return []
+        # 能力权重 = 相对集群平均
+        avg_flops = sum(max(1e-9, n.capability.compute_flops) for n in alive) / len(alive)
+
+        def effective_load(n: Node) -> float:
+            w = max(1e-9, n.capability.compute_flops) / avg_flops
+            return n.state.load / w  # 算力强（w>1）→ 有效负载小 → 优先
+
+        target = min(alive, key=effective_load)
+        task = Task(
+            task_id=str(uuid.uuid4()),
+            request_id=request.request_id,
+            node_id=target.node_id,
+            layer_range=target.state.layer_range,
+            status="pending",
+        )
+        logger.debug(f"capability-routed {request.request_id} -> {target.node_id}")
+        return [task]

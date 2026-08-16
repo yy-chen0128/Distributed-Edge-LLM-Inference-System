@@ -150,6 +150,8 @@ class Task:
     create_time: float = 0.0
     finish_time: Optional[float] = None
     result: Any = None
+    progress_tokens: int = 0     # 已提交的 token 数（token 级恢复用：从这继续）
+    _retries: int = 0            # 已重试次数
 
     def mark(self, status: str) -> None:
         self.status = status
