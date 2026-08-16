@@ -14,6 +14,7 @@ distributed-llm-scheduler/
 │   └── tests/                 # 测试（64+ 通过）
 ├── LMCache/                   # KV 缓存存储与传输（官方 clone，纯 CPU 可测）
 ├── vllm/                      # LLM 推理引擎（官方 clone）
+├── docs/                      # 调研文档与项目规划（见 docs/README.md）
 └── README.md
 ```
 
