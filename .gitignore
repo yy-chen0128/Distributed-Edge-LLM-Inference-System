@@ -1,10 +1,8 @@
-# 第三方开源仓库（独立 git 仓库，不作为主仓库内容）
-/LMCache/
-/helix/
+# 论文分析参考（独立 git 仓库，不作为运行时依赖入库）
 /spotserve/
 /moe-infinity/
 /preble/
-/vllm/
+/helix/
 
 # 文档/报告目录
 /mark/
