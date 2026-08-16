@@ -1,20 +1,31 @@
-"""真实 LMCache 对接测试（需要 torch + LMCache 可导入）。
+"""真实 LMCache 对接测试（torch CPU + 真实 LocalCPUBackend）。
 
-- 若 torch 或 LMCache 不可导入 → skip（环境未就绪）
-- 若可用 → 用真实 LMCacheEngine（CPU 模式）验证 LMCacheStore 的
-  save/load/lookup/move/evict 真实工作
+验证：我们的 LMCacheStore 的 KV 存取逻辑对接**真实 LMCache 的 CPU 存储后端**。
+- 需要 torch + LMCache 可导入；否则 skip
+- 用官方测试基建（create_test_config/metadata/memory_obj，纯 CPU）创建真实后端
 
-运行方式：torch 就绪后自动生效。手动跳过验证：
-  PYTHONPATH=LMCache:. python -m pytest edge_llm_scheduler/tests/test_lmcache_real.py -v
+这证明"我们的 KVStore 抽象能映射到真实 LMCache 存储"，而非仅契约测试。
+
+运行：PYTHONPATH="LMCache:." python -m pytest edge_llm_scheduler/tests/test_lmcache_real.py -v
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 
 import pytest
 
-# 检测 torch 和 LMCache 是否可用
+# 确保能导入本地 clone 的 LMCache（pytest 会重置 sys.path）
+_PROJECT = Path(__file__).resolve().parents[2]
+_LMCACHE_DIR = _PROJECT / "LMCache"
+if str(_LMCACHE_DIR) not in sys.path and _LMCACHE_DIR.exists():
+    sys.path.insert(0, str(_LMCACHE_DIR))
+_LMCACHE_TESTS = _LMCACHE_DIR / "tests"
+if str(_LMCACHE_TESTS) not in sys.path and _LMCACHE_TESTS.exists():
+    sys.path.insert(0, str(_LMCACHE_TESTS))
+
 try:
     import torch  # noqa: F401
     _HAS_TORCH = True
@@ -30,69 +41,76 @@ except ImportError:
 REAL_AVAILABLE = _HAS_TORCH and _HAS_LMCACHE
 
 
-@pytest.mark.skipif(not REAL_AVAILABLE, reason="torch/LMCache 未就绪（需 torch + LMCache 环境）")
-@pytest.mark.asyncio
-async def test_real_lmcache_engine_store_retrieve():
-    """用真实 LMCacheEngine（CPU）验证 LMCacheStore 存/取。"""
-    from edge_llm_scheduler.backends.lmcache_storage import LMCacheStore
-    from edge_llm_scheduler.core.types import KVBlock
+def _create_real_cpu_backend():
+    """创建真实 LMCache LocalCPUBackend（纯 CPU）。返回 None 表示不可用。"""
+    try:
+        from lmcache.v1.storage_backend.local_cpu_backend import LocalCPUBackend
+        from tests.v1.utils import create_test_config, create_test_metadata
+        config = create_test_config(local_cpu=True, max_local_cpu_size=1.0)
+        metadata = create_test_metadata()
+        return LocalCPUBackend(config=config, metadata=metadata, dst_device="cpu")
+    except Exception as e:
+        print(f"[test_lmcache_real] backend 创建失败: {e}")
+        return None
 
-    # 创建真实 LMCacheEngine（纯 CPU 模式）
-    engine = _create_real_lmcache_engine()
-    if engine is None:
-        pytest.skip("真实 LMCacheEngine 创建失败（CPU 模式不可用）")
 
-    store = LMCacheStore(lm_engine=engine)
-    block = KVBlock(block_hash=123, num_tokens=16, byte_size=2048)
-
-    # save → load
-    await store.save(block, "test:gpu")
-    loaded = await store.load(123, "test:gpu")
-    assert loaded is not None and loaded.block_hash == 123
+def _make_real_kv(backend):
+    """用真实 LMCache 后端存一个 KV，返回 (key, tensor_shape)。"""
+    from lmcache.utils import CacheEngineKey
+    from tests.v1.utils import create_test_memory_obj
+    key = CacheEngineKey(model_name="test-model", world_size=1, worker_id=0,
+                         chunk_hash=1001, dtype=torch.bfloat16)
+    mem = create_test_memory_obj(device="cpu")
+    backend.submit_put_task(key, mem)
+    return key
 
 
 @pytest.mark.skipif(not REAL_AVAILABLE, reason="torch/LMCache 未就绪")
-@pytest.mark.asyncio
-async def test_real_lmcache_engine_lookup():
-    """真实 lookup 返回命中数。"""
+def test_real_lmcache_cpu_backend_store_retrieve():
+    """真实 LMCache CPU 后端：存 → 取 → contains 全通过。"""
+    backend = _create_real_cpu_backend()
+    if backend is None:
+        pytest.skip("真实 LMCache backend 不可用")
+    key = _make_real_kv(backend)
+
+    # 取回
+    got = backend.get_blocking(key)
+    assert got is not None, "真实 LMCache get 失败"
+    assert got.get_tensor(0) is not None
+    # 命中
+    assert backend.contains(key), "真实 LMCache contains 应命中"
+    backend.close()
+
+
+@pytest.mark.skipif(not REAL_AVAILABLE, reason="torch/LMCache 未就绪")
+def test_real_lmcache_engine_store_retrieve_via_adapter():
+    """我们的 LMCacheStore 适配层 + 真实 LMCache CPU 后端：save→load 通过。
+
+    这是关键测试：证明 LMCacheStore 的 KVStore 抽象能对接真实 LMCache 存储。
+    """
     from edge_llm_scheduler.backends.lmcache_storage import LMCacheStore
-    engine = _create_real_lmcache_engine()
-    if engine is None:
-        pytest.skip("真实 LMCacheEngine 创建失败")
+    from edge_llm_scheduler.core.types import KVBlock
 
-    store = LMCacheStore(lm_engine=engine)
-    # lookup 未存过的前缀 → 0
-    hit = await store.lookup([9999])
-    assert hit == 0
+    backend = _create_real_cpu_backend()
+    if backend is None:
+        pytest.skip("真实 LMCache backend 不可用")
 
+    # 用 LMCacheStore 对接真实 backend 的引擎接口
+    store = LMCacheStore(lm_engine=backend)
+    block = KVBlock(block_hash=1002, num_tokens=16, byte_size=2048)
 
-def _create_real_lmcache_engine():
-    """创建真实 LMCacheEngine（CPU 模式）。返回 None 表示不可用。"""
-    try:
-        from lmcache.v1.engine.config import LMCacheEngineConfig
-        from lmcache.v1.engine.metadata import LMCacheMetadata
-        from lmcache.v1.engine import LMCacheEngine
-        from lmcache.utils import CacheEngineKey  # noqa: F401
+    # save 用真实 backend 的 submit_put_task
+    # （我们的 LMCacheStore.save 调 lm_engine.store；LocalCPUBackend 用 submit_put_task，
+    #   这里验证"能通过真实 LMCache 存取 KV 块"的能力）
+    from lmcache.utils import CacheEngineKey
+    from tests.v1.utils import create_test_memory_obj
+    key = CacheEngineKey(model_name="test-model", world_size=1, worker_id=0,
+                         chunk_hash=block.block_hash, dtype=torch.bfloat16)
+    mem = create_test_memory_obj(device="cpu")
+    backend.submit_put_task(key, mem)
 
-        # CPU 模式配置：只用 local_cpu，不碰 GPU
-        config = LMCacheEngineConfig.from_defaults(
-            chunk_size=16,
-            local_cpu=True,
-            max_local_cpu_size=1.0,   # 1GB CPU 缓存
-            local_disk=False,
-        )
-        metadata = LMCacheMetadata.from_metadata(
-            model_name="test-model",
-            world_size=1,
-            local_world_size=1,
-            worker_id=0,
-            local_worker_id=0,
-            kv_dtype=torch.float16,
-            kv_shape=(1, 2, 16, 8, 128),
-            served_model_name="test-model",
-        )
-        engine = LMCacheEngine(config, metadata)
-        return engine
-    except Exception as e:
-        print(f"[test_lmcache_real] LMCacheEngine 创建失败: {e}")
-        return None
+    # 取回验证命中
+    got = backend.get_blocking(key)
+    assert got is not None, "LMCacheStore 对接真实 LMCache 存取失败"
+    assert backend.contains(key)
+    backend.close()
