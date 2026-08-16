@@ -8,6 +8,17 @@
 # 文档/报告目录
 /mark/
 
+# 参考资料（PDF/图片/zip 不入库）
+*.pdf
+*.zip
+*.png
+*.jpg
+
+# 临时文件
+clone_status.txt
+*.clone.log
+helix.tar.gz
+
 # Python
 __pycache__/
 *.pyc
