@@ -1,0 +1,29 @@
+# 第三方开源仓库（独立 git 仓库，不作为主仓库内容）
+/LMCache/
+/helix/
+/spotserve/
+/moe-infinity/
+/preble/
+
+# 文档/报告目录
+/mark/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 临时/日志
+*.log
+*.tmp
+.DS_Store

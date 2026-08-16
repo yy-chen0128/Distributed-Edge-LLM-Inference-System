@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edge-llm-scheduler"
+version = "0.1.0"
+description = "分布式算力调度框架：边缘异构节点上执行 LLM 推理的管理调度层"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# 真实后端对接（有硬件时）
+real = ["vllm", "lmcache", "aiohttp", "paramiko"]
+# 测试
+test = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
