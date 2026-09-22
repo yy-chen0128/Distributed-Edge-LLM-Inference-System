@@ -35,6 +35,40 @@
 
 ---
 
+## 0.1 选型决定：哪些直接用、哪些明确不用
+
+**直接用（第一轮就上）**
+
+| 数据集 | 用途 | 动作 |
+|---|---|---|
+| Mooncake conversation trace | 前缀共享 ground truth + 长度分布 | 下 1.4 MB 单文件 |
+| Azure LLM 2024（code + conv） | 到达模式 + 两档长度 | 下两个 CSV |
+| LMCache agentic traces | 真实 prompt 文本 + session + 轮间 gap | 走 HF datasets |
+
+**明确不用，以及为什么**（"不合适就不用"——这里把理由固化，避免以后重复讨论）
+
+| 数据集 | 为什么不用 |
+|---|---|
+| **LMSYS-Chat-1M** | `schema` 里**根本没有 timestamp 字段**（已核验）→ 做不到达建模；只对前缀共享有用，而 Mooncake/LMCache 更好；且需要 HF 账号门控 |
+| **ShareGPT（所有版本）** | **无时间戳、无 token 计数**，且没有权威版本；卡面自承含 canned response/raw HTML/4chan 抓取；按关键词"去对齐"的清洗会**系统性改变长度分布** |
+| **BurstGPT** | 有 4 个月时间戳和 token 数，但**完全没有 prompt 文本**→ 对前缀共享零价值；到达模式可被 Azure 2024（免登录、一周）覆盖。**若需要"跨月漂移"再引入** |
+| **CCL-Bench** | 记录的是 GPU 执行 trace（算子/kernel/通信），不是请求轨迹；且要"贡献换访问" |
+| **FineServe / ServeGen** | 论文结论有用（突发性、分布漂移），但 FineServe **数据可得性未证实**、ServeGen **license 未证实**；不作为第一轮数据源 |
+| **`swissai-serving-trace`** | 覆盖最广，但 21.4 GB 且 license 未读全文；**作为第二批**（要 16-token bucket 复用统计时再上） |
+
+**两个"坑"的准确含义**（上一轮提到的两条，这里说清）：
+
+1. **"LMSYS-Chat-1M 没有 timestamp"** —— 这不是"要小心使用"，而是**它不能用于到达建模**，
+   所以按"不合适就不用"直接排除；替代品是 Azure/Mooncake（有真实时间）。
+2. **"公开数据里没有节点 churn"** —— 这个**不是数据集选型问题，而是数据不存在**：
+   没有任何公开数据集记录 LLM 服务集群里"某台机器被撤走/下线"的事件。
+   所以它不能靠"换一个更合适的数据集"解决。处理方式只有两条：
+   ① 用**代理信号**（WildChat 逐轮时间戳 + `hashed_ip` 推会话起止、LMCache 的 `pre_gap` 分布）；
+   ② 显式**声明假设**（例如节点在线时长服从 Weibull/指数分布），并在论文里写明这是假设。
+   **不做的是：假装有真实 churn 数据。**
+
+---
+
 ## 1. 逐条核对（四个固定问题）
 
 每个数据集都回答：**(i) 真实时间戳？(ii) 真实 prompt 文本 / 前缀 hash？(iii) in/out token 长度？(iv) 许可与门控？**
@@ -261,7 +295,56 @@ LMCache `messages → input_ids` + `pre_gap → arrival_time`。
 
 ---
 
-## 7. 复核状态
+## 7. 配套的模型参数选型：要不要量化
+
+数据集和模型要一起定，否则长度分布对不上模型容量。
+
+### 7.1 结论
+
+| 目标 | 需要 int4 吗 | 理由 |
+|---|---|---|
+| **四机异构 PP 跑 7B** | **不需要** | 7B fp16 = 15.2 GB 权重；按 8/6/4/4 GB 的加权切分（12/4/4/8 层）已验证可行；引擎的 fp16/bf16 路径是**已经跑通**的那条 |
+| 更大模型（14B）或更长上下文 | 需要 | 14B fp16 = 28 GB，四机合计约 22 GB 装不下；int4 ≈ 8 GB 才放得下 |
+| 提升并发 / KV 余量 | 需要（KV 量化或权重量化） | 4k 上下文下 7B 的 KV 约 24 层×4096×512 B ≈ 50 MB，主要压力还是权重 |
+| 与 vLLM baseline 对齐比较 | 必须同 dtype | 否则吞吐数字不可比 |
+
+### 7.2 正在下载什么
+
+`Qwen/Qwen2.5-7B-Instruct` fp16（约 15.2 GB，4 个 safetensors 分片），
+用 `scripts/hf_mirror_download.py`（**已修 User-Agent**：hf-mirror 会 403 掉默认的 `Python-urllib` UA），
+落到 `.models/Qwen2.5-7B-Instruct`（D 盘，当前剩余 48 GB）。
+下载后要做的第一件事：**用 `model_pp_fit.py` 按四个节点的显存重新算切分**，而不是沿用 8/6/4/4 的假设。
+
+### 7.3 量化不是"下个开源的就能用"——引擎会静默出错
+
+**这是必须先说清的风险**：我们的 `_materialize_shard` 用
+`AutoModelForCausalLM.from_config(config)` 在 `torch.device("meta")` 上建**标准**骨架，
+再 `load_state_dict(state, strict=False, assign=True)` 灌入本段权重。
+
+AWQ/GPTQ 的 checkpoint：
+- `config.json` 里有 `quantization_config`，需要构造 `WQLinear_GEMM` 之类的**量化层**，而不是标准 `Linear`；
+- 权重张量是**打包过的** int32（`qweight`/`qzeros`/`scales`），键名与标准模型不同。
+
+在 `strict=False` 下，这些键匹配不上 → **被静默忽略**，层里留下 meta/未初始化权重 → 输出是垃圾但**不报错**。
+所以"直接下个 AWQ 版本就能跑"是错的。int4 要落地，必须做三件事：
+
+1. 识别 `quantization_config` 并按量化类型构造正确的层（引入 autoawq / gptqmodel / llmcompressor 的 kernel）；
+2. 按打包格式映射张量名（`qweight`/`qzeros`/`scales`，含 group size / bit packing）；
+3. **加数值等价测试**：固定 prompt 下量化版与 fp16 版逐 token 比对（像 `verify_equivalence.py` 那样），
+   防止"能跑但错"。
+
+预估 **3–5 天**，且它对"每层耗时"的影响必须重新实测（`docs/design/single-machine-scope-and-batching.md` §5 第 5 项）。
+
+### 7.4 顺带记下的两个事实（影响末端切层）
+
+- **词表大小决定首/末段的固定占用**：Qwen2.5-7B 词表 152064 → fp16 的 embedding 约 **0.54 GB**；
+  Mistral-7B 词表 32768 → 约 **0.23 GB**。四机异构时，首段往往不是"层数最多"的那台。
+- encoder/decoder 的 `tie_word_embeddings` 决定末段是否要再背一份输出头（Qwen2.5 的
+  0.5B/1.5B/3B 绑定，**7B/14B 不绑定** → 末段多一份 0.54 GB）。
+
+---
+
+## 8. 复核状态
 
 | 项 | 状态 |
 |---|---|

@@ -15,7 +15,7 @@
 | 现在能测效果吗 | **能测三种东西**：路由选择差异（E2 的命中率）、切层划分（算力比例）、恢复/迁移的**语义正确性** |
 | 能测端到端收益吗 | **不能**。仿真没有负载回馈，也没把策略接到真实流水线上——见 §6 |
 | 仿真里的 `load_std` 可信吗 | **不可信**，是并列取首的产物，不是均衡效果——见 §5.2 |
-| 有没有实现缺陷 | 查出 8 处，**已全部修复**（含 2 处语义变更：迁移成本含链路、`reuse_count=0` 的估值）——见 §7 |
+| 有没有实现缺陷 | 查出 9 处，**已全部修复**（含 2 处语义变更：迁移成本含链路、`reuse_count=0` 的估值）——见 §7 |
 
 一句话：**策略的"机制"已经可测，"收益"还不可测**。二者之间差的不是算法，是三处接线。
 
@@ -398,6 +398,7 @@ result=[layered mock output from node_2] tokens=8 stages=3
 | 6 | `hf_layered_engine.py` | 跨节点恢复只带字段不带数据：目标节点 `_cache_for` 建**空** cache，stage 0 仍只喂最后一个 token → 输出语义错误 | 新增 `_has_cache()`；cache 不存在时**退回整段重算**并打日志（慢但正确） | 跨节点恢复现在是"正确但慢"，不是"快但错" |
 | 7 | `task_scheduler.py` `_on_node_left` | 恢复出的 retry 结果被丢弃，中断请求的结果不回传、`self._results` 不更新 | 回填 `self._results[request_id]` 并发 `TASK_DONE` 事件 | 恢复动作第一次变得可观测 |
 | 8 | `task_scheduler.py:131` + 三个引擎 | `hit_tokens` 被调度器对**所有**段覆盖为同一值 | 统一到调度器：`hit_tokens = hit if index == 0 else 0`；引擎侧的重判保留为冗余保险 | 行为不变（引擎本来就会纠正），但不再是两处各判一次 |
+| 9 | `hf_layered_engine.py` `kv_bytes` | **KV 计量恒返回 0**：用 `cache[i]` 取值，而 transformers 5.x 的 `DynamicCache` 不可下标，`TypeError` 被 `except ... continue` 吞掉。四机运行里每个 stage 的 `kv_bytes_last: 0` 就是这个 | 改为遍历 `cache.layers[i].keys/.values`（兼容 4.4x 的 `key_cache/value_cache`）；`status()` 里按请求上报 KV 字节 | 实测修复后：6 层 38 token = 116,736 B，每 decode 步 +3072 B，释放归 0。**注意显存增量不能当 KV**（实测是真实 KV 的 74 倍且释放后不降）。回归测试 `tests/test_kv_accounting.py` |
 
 **⚠️ 仍未闭合的一条（不是可修的 bug，是缺的能力）**：`hf_layered_engine.generate` 把"从 `progress_tokens` 续算"
 近似为"只喂 `task.prompt` 的最后一个 token"。这只有在**恢复时 `task.prompt` 已经是"到中断点为止的完整序列"**

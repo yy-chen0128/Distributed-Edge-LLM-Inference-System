@@ -153,6 +153,61 @@ Qwen2.5-7B 每层权重 510.1 MB = 0.5B 的 **17.1 倍**（28 层；$4\cdot3584^
   而实测 **5.1 ms** → 仍高出 **7 倍**，差值主要就是每层 ~0.9 ms 的启动开销。
   **所以 decode 在 batch=1 时永远是"开销/带宽"主导，与 prompt 长度无关——这正是批处理的用武之地。**
 
+### 3.7 显存里的参数与 KV：实现到什么程度、实测多少
+
+**参数（已实现、已实测）**
+
+- `prepare_epoch` 用 `torch.device("meta")` 建骨架、只把本段权重加载到真实设备（`_materialize_shard`），
+  `param_bytes` 与 `torch.cuda.memory_allocated` 都上报。实测：6 层驻留 **451.2 MB**
+  （其中首段额外背 **272.3 MB** 词表）、24 层 **988.1 MB**、每层 **29.8 MB**（差分测得）。
+- **没有的**：没有参数换入换出（offload/evict）、没有量化、没有跨进程共享
+  （4 个 agent = 4 个 CUDA context，词表在首段那边各占一份）、只在 `retire_epoch` 时释放。
+- 四段同机跑：4×6 层 ≈ 716 MB + 首段词表 272 MB ≈ **988 MB 权重**，8.6GB 卡放得下，但没有余量。
+
+**KV（模型确实在存；计量曾经是坏的，已修）**
+
+- 结构：每个 `(epoch, request_id)` 一个 `DynamicCache`，按请求隔离；`release_request` 释放；
+  epoch 退役时清理。
+- **实测（GPU，6 层 stage，38 token）**：真实 KV = **116,736 B = 0.117 MB**
+  （= 2 × 2 kv_heads × 64 head_dim × 2 B × 6 层 × 38 token，逐字节吻合）；
+  5 次 decode 后 **132,096 B**（正好 +5×3072 B）；`release_request` 后归 0。
+- **整条四段流水线**：每段各持自己 6 层的 KV，四段合计 **0.47 MB**（24 层 × 38 token × 512 B）。
+  4k 上下文即 24 × 4096 × 512 = **50.3 MB**，随上下文线性增长——这是切层时必须进的预算项。
+- **坑 1（已修）**：`kv_bytes` 原来写 `cache[i]`，而 transformers 5.x 的 `DynamicCache` **不可下标**
+  （`TypeError: 'DynamicCache' object is not subscriptable`），异常被 `except ... continue` 吞掉后
+  **恒返回 0**——四机运行里每个 stage 的 `kv_bytes_last: 0` 就是这个原因。真实路径是
+  `cache.layers[i].keys/.values`。回归测试：`tests/test_kv_accounting.py`。
+- **坑 2（写进纪律）**：**不能用 `torch.cuda.memory_allocated` 的增量当 KV**：同一次调用的增量是
+  **8.64 MB，为真实 KV 的 74 倍**（前向中间张量 + 分配器池），而且 `release_request` 之后**不降**。
+- **没有的**：**没有分页/块管理**（HF 的 cache 是每序列连续的，不是 PagedAttention）、
+  **没有按 KV 预算的准入控制**（`memory_free` 只看显存，没算 KV 增长）、
+  **没有跨机 KV 传输**（这是弹性与跨节点恢复的前置，见 §6）。
+
+### 3.8 权重放 `/mnt/d` 还是 WSL 的 ext4：实测差 20 倍
+
+| 读取对象 | 冷读（真丢 page cache） | 热读 |
+|---|---|---|
+| `/mnt/d`（DrvFs/9p，Windows D 盘） | **112.7 MiB/s** | **114.5 MiB/s** |
+| ext4（WSL 内部） | **2319 MiB/s** | — |
+
+（`scripts/measure_fs_read.py`：读 384 MiB，`posix_fadvise(DONTNEED)` 真丢缓存，3–4 次取中位数。）
+
+三个结论：
+
+1. **差 20 倍**，而且 **`/mnt/d` 热读和冷读一样慢**——Windows 侧缓存透过 9p **不生效**，
+   所以每次 epoch 切换都要付全价，不能指望"第二次就快了"。
+2. 这把 `prepare_epoch` 的成本解释清楚了：0.5B 每段 451 MB ÷ 110 MiB/s ≈ **4.1 s**，与实测
+   3.3–8.2 s 同量级。`prepare` = **读盘 + dtype 转换 + 上卡**，其中读盘是主项。
+3. **对 7B 的后果**：按 8/6/4/4 加权切分，最大一段 12 层 = 12 × 510 MB ≈ **6.1 GB**
+   → 从 `/mnt/d` 读约 **57 s**，每次重配置都要付。这对"节点离开后快速重配置"是致命的。
+   可选对策（都还需实测）：① 权重挪到 ext4（2.3 GiB/s → 约 2.7 s，代价是撑大 vhdx，
+   而 vhdx 在 C 盘）；② 量化到 int4（体积 ÷4 → 约 15 s）；③ 预转换单文件、砍掉 dtype 转换那一段；
+   ④ 让"读盘"与"继续服务旧 epoch"重叠（已经是"先 prepare 再 activate"，但节点突然离开时没有可重叠的窗口）。
+
+> **你说的"参数载入显存后运行时不读盘，所以是一次性开销"是对的。**
+> 但要注意两点：它是**每次节点集合变化**的一次性开销，所以它决定的是**重配置延迟**这个指标；
+> 而"要把 7B 放到 4 台机器上"这件事本身会让这个一次性开销从 4 s 级变成 1 分钟级。
+
 ---
 
 ## 4. 批处理能换来什么（实测上界）
@@ -280,6 +335,9 @@ per-request 的 `past_key_values` 已按 `(epoch, request_id)` 存在 `self._cac
 | 数字 | 出处 |
 |---|---|
 | 每层固定开销 0.99 ms、边际 0.00214 ms/token、拐点 463/27 token、粒度表 | `scripts/measure_stage_scaling.py`（本次实跑，RTX 4060 Laptop） |
+| 参数驻留 451.2 MB/6 层、988.1 MB/24 层、29.8 MB/层、首段词表 272.3 MB | `scripts/measure_stage_scaling.py`、`hf_layered_engine.param_bytes` |
+| KV 实测 116,736 B/6 层/38 token、每步 +3072 B、四段合计 0.47 MB | `scripts/probe_kv_accounting.py`、`probe_kv_api.py`、`.models/wsl_gpu_pipeline.json` |
+| `/mnt/d` 冷读 112.7 / 热读 114.5 MiB/s；ext4 2319 MiB/s | `scripts/measure_fs_read.py` |
 | 四段流水线 per-stage compute/hop、38 token、6 输出、`device=cuda:0`×4 | `.models/wsl_gpu_pipeline.json` |
 | `hop_ms` 的定义（含 compute） | `edge_llm_scheduler/experiments/run_real_pipeline.py:301-302` |
 | K=1/2/4 吞吐 5.06/6.54/7.82 tok/s（**CPU fp32**） | `.models/real_pipeline_conc.json` |

@@ -352,27 +352,53 @@ class HFLayeredEngine(StageRuntime):
             self._caches.pop(key, None)
 
     def kv_bytes(self, request_id: str) -> int:
+        """本请求在该 stage 的 KV 占用（字节）。
+
+        两个坑（都实测过）：
+        1. **不能写 `cache[i]`**：transformers 5.x 的 `DynamicCache` 不再可下标
+           （抛 `TypeError: 'DynamicCache' object is not subscriptable`），旧写法被
+           `except ... continue` 吞掉后**恒返回 0**——四机那次运行的
+           `kv_bytes_last: 0` 就是这个原因。真实 KV 在 `cache.layers[i].keys/.values`。
+        2. **不能用 `torch.cuda.memory_allocated` 的增量当 KV**：实测 6 层 38 token
+           的真实 KV 只有 0.117 MB，而同一次调用的显存增量是 8.64 MB（74 倍），
+           且释放请求后增量不降——那部分是前向中间张量与分配器池，不是 KV。
+
+        逐张量求和即可：本 stage 只写自己那几个 slot，空 slot 贡献 0。
+        """
         cache = self._caches.get((self._active_epoch or 0, request_id))
         if cache is None:
             return 0
-        total = 0
-        for layer_idx in range(len(self._require_active().layers)):
-            try:
-                key, value = cache[layer_idx][:2]
-            except (KeyError, IndexError, TypeError):
-                continue
-            if key is not None:
-                total += key.numel() * key.element_size()
-            if value is not None:
-                total += value.numel() * value.element_size()
-        return total
+        return sum(t.numel() * t.element_size()
+                   for t in self._iter_cache_tensors(cache))
+
+    @staticmethod
+    def _iter_cache_tensors(cache):
+        """跨 transformers 版本取出 KV 张量。
+
+        transformers >= 5：``cache.layers[i].keys`` / ``.values``（`DynamicLayer`）
+        transformers 4.4x：``cache.key_cache`` / ``cache.value_cache``（list of tensor）
+        """
+        layers = getattr(cache, "layers", None)
+        if layers is not None:
+            for layer in layers:
+                for attr in ("keys", "values"):
+                    tensor = getattr(layer, attr, None)
+                    if tensor is not None and hasattr(tensor, "numel"):
+                        yield tensor
+            return
+        for attr in ("key_cache", "value_cache"):
+            for tensor in getattr(cache, attr, None) or []:
+                if tensor is not None and hasattr(tensor, "numel"):
+                    yield tensor
 
     def status(self) -> dict:
         stage = self._active_stage()
+        open_requests = sorted({k[1] for k in self._caches})
         return {
             **self.inventory(),
             "stage_calls": self.stage_calls,
-            "open_requests": sorted({k[1] for k in self._caches}),
+            "open_requests": open_requests,
+            "kv_bytes": {rid: self.kv_bytes(rid) for rid in open_requests},
             "device_allocated_bytes": self._device_allocated(),
             "layer_range": list(stage.layer_range) if stage else None,
         }

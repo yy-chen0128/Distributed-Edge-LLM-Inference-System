@@ -25,10 +25,25 @@ SKIP_SUFFIXES = (".bin", ".pth", ".pt", ".msgpack", ".h5", ".onnx", ".gguf")
 SKIP_PREFIXES = ("optimizer", "scheduler", "rng_state", "training_args", "events.out")
 KEEP_IF_PRESENT = ("config.json", "generation_config.json")
 
+# 镜像站会拦默认的 "Python-urllib/3.x" UA（实测 403 Forbidden），必须伪装成浏览器。
+# 也可以用 HF_TOKEN 环境变量带 Bearer（镜像对公开仓库通常不需要）。
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
+
+def _request(url: str, timeout: float) -> urllib.request.Request:
+    headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return urllib.request.Request(url, headers=headers)
+
 
 def list_repo(endpoint: str, repo: str, timeout: float) -> list[dict]:
     url = f"{endpoint}/api/models/{repo}/tree/main"
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    with urllib.request.urlopen(_request(url, timeout), timeout=timeout) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     if not isinstance(payload, list):
         raise RuntimeError(f"unexpected tree payload for {repo}: {type(payload)}")
@@ -58,7 +73,7 @@ def download(endpoint: str, repo: str, remote_path: str, dest_file: str, timeout
     os.makedirs(os.path.dirname(dest_file) or ".", exist_ok=True)
     tmp = dest_file + ".part"
     started = time.perf_counter()
-    with urllib.request.urlopen(url, timeout=timeout) as resp, open(tmp, "wb") as fh:
+    with urllib.request.urlopen(_request(url, timeout), timeout=timeout) as resp, open(tmp, "wb") as fh:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         while True:

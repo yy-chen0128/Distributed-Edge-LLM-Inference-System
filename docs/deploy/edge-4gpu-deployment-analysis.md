@@ -197,6 +197,11 @@ decode  单段耗时 ≈  0 ms(固定) +  5.1 ms × 层数        （末段再 +
 `PipelineReconfigurationCoordinator` 的"先准备、再切流、最后退役"一致 |
 
 要点：**重配置的耗时几乎全部是"装载分片"**（读盘 + dtype 转换 + 上卡），不是协议开销。
+原因已实测清楚：权重放在 `/mnt/d`（Windows 盘）时**冷读只有 112.7 MiB/s、热读 114.5 MiB/s
+（Windows 侧缓存透过 9p 不生效）**，而 ext4 内部是 **2319 MiB/s**，差 20 倍。
+0.5B 每段 451 MB ÷ 110 MiB/s ≈ 4.1 s，与上面实测的 2.7–8.2 s 同量级。
+对 7B 的后果：最大一段 12 层 ≈ 6.1 GB → **约 57 s**，每次重配置都要付。
+测量方法与对策见 [`../design/single-machine-scope-and-batching.md`](../design/single-machine-scope-and-batching.md) §3.8。
 这直接指向一个优化方向，也是论文可以做的实验：
 **把"准备"做在后台、把"切换"压到毫秒级**（epoch 蓝绿），以及用**更小的分片/量化权重**降低装载时间。
 
