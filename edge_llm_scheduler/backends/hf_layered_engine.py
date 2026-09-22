@@ -391,6 +391,28 @@ class HFLayeredEngine(StageRuntime):
                 if tensor is not None and hasattr(tensor, "numel"):
                     yield tensor
 
+    def request_positions(self) -> dict:
+        """每个在飞请求"已经处理到第几个 token"（= cache 的序列长度）。
+
+        这是中断恢复所需要的进度读数，**引擎自己就能报**，不必去读 KV 张量：
+        实测 38-token prefill 后 `get_seq_length() == 38`，每 decode 一步 +1。
+        位置 = 该请求已经算过的 token 总数（prompt + 已生成）。
+
+        注意：只有**活着的进程**能回答这个问题。设备被直接抱走/断电时问不到，
+        所以控制面必须自己也能数（它收到了几个 token 它是知道的），
+        引擎自报只作为校验与兜底。
+        """
+        positions = {}
+        epoch = self._active_epoch or 0
+        for (cached_epoch, request_id), cache in self._caches.items():
+            if cached_epoch != epoch:
+                continue
+            try:
+                positions[request_id] = int(cache.get_seq_length())
+            except Exception:  # noqa: BLE001 - 不同版本接口不一
+                continue
+        return positions
+
     def status(self) -> dict:
         stage = self._active_stage()
         open_requests = sorted({k[1] for k in self._caches})
@@ -399,6 +421,7 @@ class HFLayeredEngine(StageRuntime):
             "stage_calls": self.stage_calls,
             "open_requests": open_requests,
             "kv_bytes": {rid: self.kv_bytes(rid) for rid in open_requests},
+            "request_positions": self.request_positions(),
             "device_allocated_bytes": self._device_allocated(),
             "layer_range": list(stage.layer_range) if stage else None,
         }

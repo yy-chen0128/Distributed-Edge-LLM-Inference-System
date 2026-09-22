@@ -74,3 +74,41 @@ def test_never_reads_by_subscript():
 
     engine = engine_with_cache(SubscriptOnly())
     assert engine.kv_bytes("r1") == 0    # 不再抛异常，也不再假装有 KV
+
+
+def test_request_positions_reports_per_request_progress():
+    """进度读数：每个在飞请求"已经处理到第几个 token"。
+
+    这就是中断恢复需要的 progress_tokens 来源——引擎自己就能报，
+    不必去读 KV 张量。旧 epoch 的条目不应出现在结果里。
+    """
+
+    class FakeCache:
+        def __init__(self, seq_len):
+            self._seq_len = seq_len
+
+        def get_seq_length(self):
+            return self._seq_len
+
+    engine = HFLayeredEngine.__new__(HFLayeredEngine)
+    engine._caches = {
+        (1, "r1"): FakeCache(38),
+        (1, "r2"): FakeCache(10),
+        (0, "stale"): FakeCache(5),      # 旧 epoch → 必须被过滤掉
+    }
+    engine._active_epoch = 1
+
+    assert engine.request_positions() == {"r1": 38, "r2": 10}
+
+
+def test_request_positions_survives_a_broken_cache_object():
+    """某个 cache 读不出长度时不要炸，跳过它即可。"""
+
+    class Broken:
+        def get_seq_length(self):
+            raise RuntimeError("boom")
+
+    engine = HFLayeredEngine.__new__(HFLayeredEngine)
+    engine._caches = {(1, "r1"): Broken()}
+    engine._active_epoch = 1
+    assert engine.request_positions() == {}

@@ -63,6 +63,7 @@ async def main():
     print(f"\n  torch.cuda.memory_allocated delta = "
           f"{(after_prefill - base) / 1e6:.2f} MB")
     print(f"  engine.kv_bytes(rid)              = {engine.kv_bytes(rid)} bytes")
+    print(f"  engine.request_positions()        = {engine.request_positions()}")
 
     print("\n--- 5 decode steps ---")
     for i in range(5):
@@ -72,6 +73,12 @@ async def main():
     print(f"  torch.cuda.memory_allocated delta = "
           f"{(after_decode - base) / 1e6:.2f} MB")
     print(f"  engine.kv_bytes(rid)              = {engine.kv_bytes(rid)} bytes")
+    print(f"  engine.request_positions()        = {engine.request_positions()}")
+
+    print("\n--- second request (position is per-request) ---")
+    engine.prefill("second", token_ids=list(range(10)))
+    print(f"  positions                         = {engine.request_positions()}")
+    print(f"  status()['kv_bytes']              = {engine.status()['kv_bytes']}")
 
     # Expected size: 2 (K,V) * layers * num_tokens * kv_heads * head_dim * bytes
     cfg = engine.config
