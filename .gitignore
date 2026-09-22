@@ -9,6 +9,16 @@
 /preble/
 /helix/
 
+# 引擎选型调研用的第三方源码快照（只读，用于核对能力；见
+# docs/research/inference-engine-selection.md）。
+#   ollama        MIT，Go 服务端源码（核对"有没有跨机机制"）
+#   lmstudio-python / lms  MIT，LM Studio 的客户端 SDK 与 CLI（服务端闭源）
+/ollama/
+/ollama-src/
+/lmstudio-python/
+/lmstudio-js/
+/lms/
+
 # 文档/报告目录
 /mark/
 
