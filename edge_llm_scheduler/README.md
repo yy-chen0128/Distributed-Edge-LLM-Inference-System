@@ -30,6 +30,9 @@
 cd project/
 PYTHONPATH=. python -m edge_llm_scheduler.cli --nodes 3 --requests 3
 
+# 无硬件验证（真正按层区间串行执行的 pipeline mock）
+PYTHONPATH=. python -m edge_llm_scheduler.experiments.run_layered_simulation --nodes 3
+
 # 跑测试
 PYTHONPATH=. python -m pytest edge_llm_scheduler/tests/ -v
 ```
@@ -86,8 +89,8 @@ class TaskScheduler:
 |---|---|---|---|
 | 放置 | `PlacementPolicy.place()` | `DefaultPlacement`（负载最轻）；**`E2Placement`（缓存感知路由）** | 按节点能力分任务；专家覆盖路由 |
 | 迁移 | `MigrationPolicy.decide()/execute()` | `DefaultMigration`（全传）；**`PriorityMigration`（PT×N 优先级+时间预算）** | token 级截断；参数从云端 vs 设备权衡；冗余复制 |
-| 重并行化 | `ReparallelizationPolicy.reconfigure()` | 不变（占位） | 节点变化后 (D,P,M,B) 调整 + 流水线拓扑 |
-| 中断恢复 | `RecoveryPolicy.recover()` | 重跑（占位） | token 级恢复（SpotServe stateful recovery） |
+| 重并行化 | `ReparallelizationPolicy.reconfigure()` | **`CapabilityReparallelization`（按能力重切层）** | 节点变化后 (D,P,M,B) 调整 + 动态流水线拓扑 |
+| 中断恢复 | `RecoveryPolicy.recover()` | **`TokenRecovery`（保留进度）** | 活节点重路由 + KV 恢复一致性 |
 
 ### E2Placement（缓存感知路由，参考 Preble）
 ```
@@ -104,6 +107,24 @@ else:                                     → EXPLORE：送 prompt-aware 负载�
 ```
 - `reuse_count`：历史共享请求数；`prefill_time_ms`：重算这段 KV 的耗时。
 - 时间受限（边缘无宽限期）时只传高价值块，低价值块丢弃（重算便宜）。
+
+## 分层执行边界
+
+`LayeredPipelinePlacement + LayeredMockEngine` 用于无 GPU 验证：每个 stage
+只执行自己的 `layer_range`，stage 之间通过 `Transport.push/pull` 传递并校验真实
+activation payload，并为每段层区间登记独立 KV 块。`PipelineReconfigurationCoordinator`
+以 epoch 执行预装、KV 副本、切流和 drain，支持在节点能力/成员变化后重分层。
+这是真实的控制流与状态生命周期模拟，但不执行矩阵运算。
+
+`VLLMEngine` 是 OpenAI HTTP 客户端。它可以调用一个已经由 vLLM 自己配置好
+`--pipeline-parallel-size` 的完整分布式实例，但不能把一个请求拆成多个独立
+HTTP 端点来执行层区间；如果误把多个 stage 任务交给它，会明确报错。
+
+vLLM 源码边界、静态 PP 启动方式与本项目的低耦合重配置方案见
+[`docs/research/vllm-edge-integration.md`](../docs/research/vllm-edge-integration.md)。
+
+当前实现状态、旧卡多卡验证方案和后续路线见
+[`docs/plan/current-work-and-roadmap.md`](../docs/plan/current-work-and-roadmap.md)。
 
 ## 真实对接（有硬件时）
 
@@ -130,5 +151,5 @@ edge_llm_scheduler/
 │   └── request_flow.py  # 请求生命周期
 ├── policies/          # 策略层（接口+默认实现）
 ├── backends/          # mock/vLLM/LMCache/TCP/WiFi
-└── tests/             # 20 个测试（mock 验证）
+└── tests/             # 当前 76 个测试（mock/CPU/Torch tensor 验证）
 ```

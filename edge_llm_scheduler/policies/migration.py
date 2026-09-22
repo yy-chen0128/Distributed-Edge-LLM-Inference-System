@@ -82,6 +82,7 @@ class DefaultMigration(MigrationPolicy):
             dst = targets[i % len(targets)]
             plan.block_moves.append({
                 "block_hash": bid,
+                "src_location": self._source_location(index, bid, node_id),
                 "dst_location": dst,
                 "priority": 0.0,
             })
@@ -93,8 +94,12 @@ class DefaultMigration(MigrationPolicy):
     ) -> None:
         for mv in plan.block_moves:
             bid = mv["block_hash"]
+            src = mv.get("src_location")
             dst = mv["dst_location"]
-            src = dst.rsplit(":", 1)[0] + ":gpu"
+            if not src:
+                logger.warning(f"migration block {bid} has no source location")
+                plan.block_drops.append(bid)
+                continue
             try:
                 await storage.move(bid, src, dst)
                 logger.debug(f"migrated block {bid} -> {dst}")
@@ -106,6 +111,14 @@ class DefaultMigration(MigrationPolicy):
                 await storage.evict(bid, location="*")
             except Exception:
                 pass
+
+    @staticmethod
+    def _source_location(index: Dict[int, List[str]], block_hash: int, node_id: str) -> str:
+        prefix = f"{node_id}:"
+        for location in index.get(block_hash, []):
+            if location.startswith(prefix):
+                return location
+        return f"{node_id}:gpu"
 
 
 class PriorityMigration(MigrationPolicy):
@@ -144,6 +157,7 @@ class PriorityMigration(MigrationPolicy):
             return plan
 
         # ① 收集每块，算价值 PT×N
+        index = await storage.get_index()
         valued: List[tuple] = []          # (block, priority)
         for bid in kv_block_ids:
             block = await self._load_block(storage, bid, node_id)
@@ -166,10 +180,12 @@ class PriorityMigration(MigrationPolicy):
             if dst is None:
                 plan.block_drops.append(block.block_hash)
                 continue
-            cost_ms = await storage.estimate_move_cost(block, f"{node_id}:gpu", dst)
+            src = self._find_source_location(index, block.block_hash, node_id)
+            cost_ms = await storage.estimate_move_cost(block, src, dst)
             if cost_ms <= budget_ms:
                 plan.block_moves.append({
                     "block_hash": block.block_hash,
+                    "src_location": src,
                     "dst_location": dst,
                     "priority": priority,
                     "cost_ms": cost_ms,
@@ -189,8 +205,12 @@ class PriorityMigration(MigrationPolicy):
     ) -> None:
         for mv in plan.block_moves:
             bid = mv["block_hash"]
+            src = mv.get("src_location")
             dst = mv["dst_location"]
-            src = dst.rsplit(":", 1)[0] + ":gpu"
+            if not src:
+                logger.warning(f"priority migration block {bid} has no source location")
+                plan.block_drops.append(bid)
+                continue
             try:
                 await storage.move(bid, src, dst)
                 logger.debug(f"priority-migrated block {bid} -> {dst}")
@@ -213,6 +233,14 @@ class PriorityMigration(MigrationPolicy):
                 return b
         return None
 
+    @staticmethod
+    def _find_source_location(index: Dict[int, List[str]], block_hash: int, node_id: str) -> str:
+        prefix = f"{node_id}:"
+        for location in index.get(block_hash, []):
+            if location.startswith(prefix):
+                return location
+        return f"{node_id}:gpu"
+
     def _select_targets(self, available_nodes: Optional[List[Node]]) -> List[Node]:
         if not available_nodes:
             return []
@@ -224,4 +252,3 @@ class PriorityMigration(MigrationPolicy):
             return None
         t = min(targets, key=lambda n: n.state.load)
         return f"{t.node_id}:gpu"
-

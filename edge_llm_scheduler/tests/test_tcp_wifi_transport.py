@@ -36,6 +36,23 @@ async def test_tcp_push_receiver_gets_data():
 
 
 @pytest.mark.asyncio
+async def test_tcp_pull_returns_and_consumes_data():
+    receiver = TcpReceiver(host="127.0.0.1", port=0)
+    server = await asyncio.start_server(receiver._handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    transport = TCPTransport(nodes={"node_b": ("127.0.0.1", port)})
+    await transport.push(b"activation", "node_b", "activation:req:1")
+    await asyncio.sleep(0.05)
+
+    assert await transport.pull("node_b", "activation:req:1") == b"activation"
+    assert await transport.pull("node_b", "activation:req:1") is None
+
+    await transport.close()
+    server.close()
+    await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_tcp_transfer_time_estimate():
     transport = TCPTransport(nodes={}, bandwidth_mbps=1000.0)
     # 10MB @ 1000MB/s ≈ 10ms

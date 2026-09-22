@@ -132,6 +132,27 @@ async def test_estimate_move_cost():
 
 
 @pytest.mark.asyncio
+async def test_catalog_tracks_locations_and_moves():
+    fake = FakeLMCacheEngine()
+    store = LMCacheStore(lm_engine=fake)
+    block = KVBlock(
+        block_hash=77,
+        num_tokens=4,
+        byte_size=512,
+        tokens=[10, 11, 12, 13],
+    )
+
+    await store.save(block, "node_a:cpu")
+    assert await store.get_index() == {77: ["node_a:cpu"]}
+
+    await store.move(77, "node_a:cpu", "node_b:cpu")
+    assert await store.get_index() == {77: ["node_b:cpu"]}
+
+    await store.evict(77, "node_b:cpu")
+    assert await store.get_index() == {}
+
+
+@pytest.mark.asyncio
 async def test_detached_raises():
     """未 attach LMCacheEngine 时调用应明确报错。"""
     store = LMCacheStore(lm_engine=None)

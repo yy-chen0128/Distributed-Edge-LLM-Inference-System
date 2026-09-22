@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import base64
+import hashlib
+import json
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from typing import Any, Optional
 
@@ -100,6 +103,106 @@ class ModelPlacement:
         return len(self.experts_gpu) + len(self.experts_cpu)
 
 
+@dataclass(frozen=True)
+class StageAssignment:
+    """一个 pipeline epoch 中某个节点负责的模型阶段。
+
+    epoch 是控制面的配置版本。请求在进入流水线时绑定一个 epoch，避免节点
+    重配置后把旧 activation 误送到新层区间。
+    """
+
+    pipeline_epoch: int
+    node_id: str
+    layer_range: tuple[int, int]
+    source_node: Optional[str] = None
+
+
+@dataclass
+class PipelinePlan:
+    """一个可切换的、连续覆盖完整模型的分层计划。"""
+
+    pipeline_epoch: int
+    placements: list[ModelPlacement]
+
+    def ordered_placements(self) -> list[ModelPlacement]:
+        return sorted(self.placements, key=lambda placement: placement.layer_range or (-1, -1))
+
+
+@dataclass(frozen=True)
+class ActivationEnvelope:
+    """跨 stage 的 activation 数据面协议。
+
+    payload 对真实运行时是序列化后的 hidden states；CPU 模拟器只放可校验的
+    占位字节。协议包含 epoch、源/目标和校验和，因此链路重放、串线或损坏会在
+    进入下一阶段前被检测出来。
+    """
+
+    request_id: str
+    pipeline_epoch: int
+    stage_index: int
+    layer_range: tuple[int, int]
+    source_node: str
+    destination_node: Optional[str]
+    payload: bytes
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def for_destination(self, node_id: str) -> "ActivationEnvelope":
+        return replace(self, destination_node=node_id)
+
+    @property
+    def tag(self) -> str:
+        destination = self.destination_node or "unassigned"
+        return (
+            f"activation:{self.request_id}:{self.pipeline_epoch}:"
+            f"{self.stage_index}:{self.source_node}:{destination}"
+        )
+
+    def to_bytes(self) -> bytes:
+        body = self._body()
+        body["checksum"] = self._checksum(body)
+        return json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "ActivationEnvelope":
+        try:
+            body = json.loads(raw.decode("utf-8"))
+            checksum = body.pop("checksum")
+        except (UnicodeDecodeError, ValueError, KeyError) as exc:
+            raise ValueError("invalid activation envelope") from exc
+        if checksum != cls._checksum(body):
+            raise ValueError("activation checksum mismatch")
+        try:
+            return cls(
+                request_id=str(body["request_id"]),
+                pipeline_epoch=int(body["pipeline_epoch"]),
+                stage_index=int(body["stage_index"]),
+                layer_range=tuple(body["layer_range"]),
+                source_node=str(body["source_node"]),
+                destination_node=body.get("destination_node"),
+                payload=base64.b64decode(body["payload"].encode("ascii"), validate=True),
+                metadata=dict(body.get("metadata") or {}),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("invalid activation envelope fields") from exc
+
+    def _body(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "pipeline_epoch": self.pipeline_epoch,
+            "stage_index": self.stage_index,
+            "layer_range": list(self.layer_range),
+            "source_node": self.source_node,
+            "destination_node": self.destination_node,
+            "payload": base64.b64encode(self.payload).decode("ascii"),
+            "metadata": self.metadata,
+        }
+
+    @staticmethod
+    def _checksum(body: dict[str, Any]) -> str:
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+
+
 # ============================================================
 # KV 块（KVBlock）
 # ============================================================
@@ -112,6 +215,7 @@ class KVBlock:
     byte_size: int               # 大小（字节）
     layer_range: Optional[tuple] = None  # 覆盖的层区间（用于部分迁移）
     data: Any = None             # 实际数据（mock 用 bytes；真实走 LMCache）
+    tokens: list = field(default_factory=list)  # 产生该块的 token ids（真实 LMCache key）
 
     # 迁移优先级辅助（参考 Preble 的 PT×N 公式）
     reuse_count: int = 0         # 历史被共享的请求数（N_j）
@@ -146,6 +250,14 @@ class Task:
     node_id: str
     layer_range: Optional[tuple] = None
     kv_block_ids: list = field(default_factory=list)
+    prompt: Any = None
+    max_tokens: int = 64
+    hit_tokens: int = 0
+    stage_index: int = 0
+    stage_count: int = 1
+    pipeline_epoch: int = 0
+    activation: Any = None
+    prompt_len: int = 0
     status: str = "pending"      # pending/running/done/failed/interrupted
     create_time: float = 0.0
     finish_time: Optional[float] = None
@@ -167,6 +279,10 @@ class GenerationResult:
     latency_ms: float = 0.0
     hit_tokens: int = 0          # 缓存命中 token 数
     error: Optional[str] = None
+    kv_blocks: list = field(default_factory=list)  # 本次执行实际产生的块
+    stage_index: int = 0
+    activation: Optional[ActivationEnvelope] = None  # 跨 stage activation
+    metadata: dict = field(default_factory=dict)
 
 
 # ============================================================

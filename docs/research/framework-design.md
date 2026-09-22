@@ -3,7 +3,7 @@
 > 日期：2026-08-16
 > 代码位置：`project/edge_llm_scheduler/`
 > 设计依据：论文池分析（Helix/SpotServe/Preble/MoE-Infinity/LMCache）+ 相关开源实现代码分析
-> 状态：框架机制层完整实现，38 个测试通过；策略层为接口+默认实现（复杂算法后续补充）
+> 状态：框架机制层已实现，当前完整测试为 76 passed、1 skipped；策略层为接口+默认实现（复杂算法后续补充）
 
 ---
 
@@ -159,7 +159,7 @@ project/edge_llm_scheduler/
 ├── core/          # types/storage/transport/event_bus/node_manager/model_manager/task_scheduler/request_flow
 ├── policies/      # placement/migration/reparallelization/recovery
 ├── backends/      # mock_* + vllm_engine/lmcache_storage/tcp_transport/wifi_transport
-└── tests/         # 38 个测试（L1 逻辑 + L2 契约）
+└── tests/         # 当前 76 个测试（L1 逻辑 + L2 契约 + Torch tensor）
 ```
 
 ## 九、验证运行
@@ -167,5 +167,5 @@ project/edge_llm_scheduler/
 ```bash
 cd project/
 PYTHONPATH=. python -m edge_llm_scheduler.cli --nodes 3 --requests 3   # 端到端演示
-PYTHONPATH=. python -m pytest edge_llm_scheduler/tests/ -q            # 38 测试
+PYTHONPATH=. python -m pytest edge_llm_scheduler/tests/ -q            # 当前 76 passed、1 skipped
 ```

@@ -1,0 +1,45 @@
+{
+  "_comment": "四台笔记本的真实部署配置：每台机器上先起一个 stage_agent，再用本文件作为控制面输入。weight 决定切层比例（可用实测算力或显存比例填写；相同则平均切）。",
+  "model_path": ".models/Qwen2.5-0.5B-Instruct",
+  "model_transfer": "每台机器各自准备同一份模型权重（或用 scripts/hf_mirror_download.py 从镜像下载）；agent 只加载自己那段层，但仍然需要能读到完整 safetensors 文件。",
+  "wire_dtype": "float16",
+  "nodes": [
+    {
+      "node_id": "alpha",
+      "host": "192.168.1.11",
+      "port": 9100,
+      "weight": 3.0,
+      "device": "cuda:0",
+      "note": "RTX 4060 Laptop 8GB（本机）——算力最强，切最多层"
+    },
+    {
+      "node_id": "beta",
+      "host": "192.168.1.12",
+      "port": 9100,
+      "weight": 2.0,
+      "device": "cuda:0",
+      "note": "RTX 3060 Laptop 6GB"
+    },
+    {
+      "node_id": "gamma",
+      "host": "192.168.1.13",
+      "port": 9100,
+      "weight": 1.0,
+      "device": "cuda:0",
+      "note": "GTX 1650 4GB——显存小、算力弱"
+    },
+    {
+      "node_id": "delta",
+      "host": "192.168.1.14",
+      "port": 9100,
+      "weight": 1.0,
+      "device": "cpu",
+      "note": "无独显或显存不足的机器，作为慢节点/缓存节点"
+    }
+  ],
+  "recommended_model_scale": {
+    "single_8GB_laptop": "Qwen2.5-0.5B/1.5B fp16，3B int4",
+    "two_laptops": "7B int4 或 3B fp16 切 2 段",
+    "four_laptops": "7B-8B fp16（14-16GB）切 4 段；14B int4（约 9GB）切 2-4 段"
+  }
+}

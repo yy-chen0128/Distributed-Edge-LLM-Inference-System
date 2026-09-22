@@ -7,6 +7,7 @@
 
 from .placement import (
     PlacementPolicy, DefaultPlacement, E2Placement, CapabilityPlacement,
+    LayeredPipelinePlacement,
 )
 from .migration import MigrationPolicy, DefaultMigration, PriorityMigration, MigrationPlan
 from .reparallelization import (
@@ -16,6 +17,7 @@ from .recovery import RecoveryPolicy, DefaultRecovery, TokenRecovery
 
 __all__ = [
     "PlacementPolicy", "DefaultPlacement", "E2Placement", "CapabilityPlacement",
+    "LayeredPipelinePlacement",
     "MigrationPolicy", "DefaultMigration", "PriorityMigration", "MigrationPlan",
     "ReparallelizationPolicy", "DefaultReparallelization", "CapabilityReparallelization",
     "RecoveryPolicy", "DefaultRecovery", "TokenRecovery",

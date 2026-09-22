@@ -37,8 +37,15 @@ class VLLMEngine(Engine):
         self.timeout_s = timeout_s
 
     async def generate(self, task: Task) -> GenerationResult:
-        prompt = getattr(task, "_prompt_text", "")
-        max_tokens = getattr(task, "_max_tokens", 64)
+        if task.stage_count > 1:
+            raise RuntimeError(
+                "VLLMEngine OpenAI adapter cannot execute a layer stage. "
+                "The OpenAI endpoint represents a complete vLLM engine; use "
+                "LayeredMockEngine for CPU simulation or a vLLM distributed "
+                "worker/runtime for real pipeline parallelism."
+            )
+        prompt = task.prompt if task.prompt is not None else getattr(task, "_prompt_text", "")
+        max_tokens = task.max_tokens if task.max_tokens != 64 else getattr(task, "_max_tokens", 64)
         payload = {
             "model": self.model or "default",
             "prompt": prompt,

@@ -27,6 +27,9 @@ class MockKVStore(KVStore):
         self.bandwidth_mbps: float = 100.0
 
     async def save(self, block: KVBlock, location: str) -> None:
+        if block.data is None:
+            # 不按 byte_size 分配大块内存；保留可验证的内容标识即可。
+            block.data = f"mock-kv:{block.block_hash}".encode()
         self._store.setdefault(block.block_hash, {})[location] = block
         if block.block_hash not in self._prefix_order:
             self._prefix_order.append(block.block_hash)
@@ -55,14 +58,11 @@ class MockKVStore(KVStore):
             raise KeyError(f"block {block_hash} not found")
         block = locs.get(src)
         if block is None:
-            # 容忍源位置不精确：从任意位置取
-            block = self._first_block(block_hash)
-        if block is None:
-            raise KeyError(f"block {block_hash} has no data")
+            raise KeyError(f"block {block_hash} not found at source {src}")
         locs[dst] = block
-        # 搬移语义：删除除 dst 外的所有位置（不管 src 精不精确）
-        for k in [k for k in locs if k != dst]:
-            del locs[k]
+        # move 是单副本迁移；多副本由重复 save 实现。
+        if src != dst:
+            locs.pop(src, None)
 
     async def evict(self, block_hash: int, location: str) -> None:
         if location == "*":

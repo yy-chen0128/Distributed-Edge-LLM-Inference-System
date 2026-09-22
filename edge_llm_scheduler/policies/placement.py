@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from ..core.storage import KVStore
-from ..core.types import InferenceRequest, Node, Task
+from ..core.types import InferenceRequest, ModelPlacement, Node, PipelinePlan, Task
 
 logger = logging.getLogger(__name__)
 
@@ -254,3 +254,58 @@ class CapabilityPlacement(PlacementPolicy):
         )
         logger.debug(f"capability-routed {request.request_id} -> {target.node_id}")
         return [task]
+
+
+class LayeredPipelinePlacement(PlacementPolicy):
+    """把一个连续的模型放置计划展开成可执行的多 stage pipeline。
+
+    该策略只负责把已经决定好的 ``ModelPlacement`` 变成任务链；它不重新
+    计算层切分。层区间按 start 排序并检查节点仍然健康，适合和
+    ``CapabilityReparallelization``、``ModelManager`` 配合使用。
+    """
+
+    def __init__(
+        self,
+        placements: Optional[List[ModelPlacement]] = None,
+        pipeline_epoch: int = 0,
+    ) -> None:
+        self.placements = list(placements or [])
+        self.pipeline_epoch = pipeline_epoch
+
+    def set_plan(self, plan: PipelinePlan) -> None:
+        """让后续进入的请求绑定新 epoch；旧请求继续带着旧 epoch 执行。"""
+        self.placements = list(plan.placements)
+        self.pipeline_epoch = plan.pipeline_epoch
+
+    async def place(
+        self,
+        model,
+        nodes: List[Node],
+        request: InferenceRequest,
+        storage: Optional[KVStore] = None,
+        hit_tokens: int = 0,
+    ) -> List[Task]:
+        alive = {n.node_id: n for n in nodes if n.state.alive}
+        placements = sorted(
+            (p for p in self.placements if p.node_id in alive and p.layer_range),
+            key=lambda p: p.layer_range[0],
+        )
+        if not placements:
+            return []
+
+        tasks = []
+        for index, placement in enumerate(placements):
+            tasks.append(Task(
+                task_id=str(uuid.uuid4()),
+                request_id=request.request_id,
+                node_id=placement.node_id,
+                layer_range=placement.layer_range,
+                status="pending",
+                prompt=request.prompt,
+                max_tokens=request.max_tokens,
+                hit_tokens=hit_tokens if index == 0 else 0,
+                stage_index=index,
+                stage_count=len(placements),
+                pipeline_epoch=self.pipeline_epoch,
+            ))
+        return tasks

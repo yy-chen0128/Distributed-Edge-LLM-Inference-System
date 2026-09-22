@@ -16,18 +16,21 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
 from .event_bus import EventBus
 from .node_manager import NodeManager
 from .storage import KVStore
 from .transport import Transport
 from .types import (
-    Event, EventType, GenerationResult, InferenceRequest, KVBlock, Node, Task,
+    ActivationEnvelope, Event, EventType, GenerationResult, InferenceRequest, KVBlock, Node, Task,
 )
 from ..policies.placement import PlacementPolicy, DefaultPlacement
 from ..policies.migration import MigrationPolicy, DefaultMigration
 from ..policies.recovery import RecoveryPolicy, DefaultRecovery
+
+if TYPE_CHECKING:
+    from .pipeline_controller import PipelineReconfigurationCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,8 @@ class TaskScheduler:
         placement_policy: Optional[PlacementPolicy] = None,
         migration_policy: Optional[MigrationPolicy] = None,
         recovery_policy: Optional[RecoveryPolicy] = None,
+        model_manager=None,
+        pipeline_controller: Optional["PipelineReconfigurationCoordinator"] = None,
     ) -> None:
         self.node_mgr = node_manager
         self.storage = storage
@@ -57,6 +62,11 @@ class TaskScheduler:
         self.placement = placement_policy or DefaultPlacement()
         self.migration = migration_policy or DefaultMigration()
         self.recovery = recovery_policy or DefaultRecovery()
+        self.model_manager = model_manager
+        self.pipeline_controller = pipeline_controller
+        # EventBus 是异步队列；调度器创建前已入队的节点事件属于历史状态，
+        # 不应在控制器挂载后重新触发一次拓扑变更。
+        self._event_subscription_time = time.time()
 
         # node_id -> Engine（真实引擎或 mock）
         self._engines: Dict[str, Engine] = {}
@@ -89,9 +99,15 @@ class TaskScheduler:
         tasks = await self.route_request(req)
         if not tasks:
             return GenerationResult(request_id=req.request_id, error="no available node")
-        results = await asyncio.gather(*(self._run_task(t) for t in tasks))
-        # 汇总（当前取第一个成功结果；多 Task 拼装后续补充）
+        if len(tasks) == 1:
+            results = [await self._run_task(tasks[0])]
+        else:
+            # 多个任务表示一个层级 pipeline，而不是多个独立副本。
+            # stage 必须串行推进：后一个 stage 消费前一个 stage 的 activation。
+            results = [await self._run_pipeline(tasks)]
         result = next((r for r in results if r is not None and r.error is None), results[0])
+        if result is None:
+            result = GenerationResult(request_id=req.request_id, error="task execution failed")
         self._results[req.request_id] = result
         return result
 
@@ -104,9 +120,68 @@ class TaskScheduler:
         # 查询 KV 前缀命中（缓存感知路由的依据）
         prefix_hashes = self._hashes_from_prompt(req.prompt)
         hit = await self.storage.lookup(prefix_hashes)
-        return await self.placement.place(
+        tasks = await self.placement.place(
             model=None, nodes=nodes, request=req, storage=self.storage, hit_tokens=hit
         )
+        # 让所有后端都使用正式 Task 字段；兼容旧的第三方 PlacementPolicy。
+        for index, task in enumerate(tasks):
+            task.prompt = req.prompt
+            task.max_tokens = req.max_tokens
+            task.prompt_len = self._prompt_len(req.prompt)
+            task.hit_tokens = hit
+            task.stage_index = index
+            task.stage_count = len(tasks)
+        return tasks
+
+    async def _run_pipeline(self, tasks: List[Task]) -> Optional[GenerationResult]:
+        """按层区间顺序执行一个模拟/真实 stage pipeline。"""
+        ordered = sorted(tasks, key=lambda t: (
+            t.layer_range[0] if t.layer_range else t.stage_index,
+            t.stage_index,
+        ))
+        activation: Optional[ActivationEnvelope] = None
+        previous_node = None
+        final_result: Optional[GenerationResult] = None
+        for index, task in enumerate(ordered):
+            task.stage_index = index
+            task.stage_count = len(ordered)
+            task.activation = activation
+            if activation is not None and previous_node != task.node_id:
+                activation = await self._deliver_activation(activation, task.node_id)
+                task.activation = activation
+            result = await self._run_task(task)
+            if result is None or result.error is not None:
+                return result
+            activation = result.activation
+            previous_node = task.node_id
+            final_result = result
+        return final_result
+
+    async def _deliver_activation(
+        self,
+        activation: ActivationEnvelope,
+        destination_node: str,
+    ) -> ActivationEnvelope:
+        """把上一 stage 的 hidden states 作为受校验的数据面消息交给下一 stage。"""
+        delivery = activation.for_destination(destination_node)
+        if self.transport is None:
+            return delivery
+
+        started = time.perf_counter()
+        raw = delivery.to_bytes()
+        await self.transport.push(raw, destination_node, delivery.tag)
+        received = await self.transport.pull(destination_node, delivery.tag)
+        if received is None:
+            raise RuntimeError(
+                f"activation delivery failed for request {delivery.request_id}: "
+                f"{delivery.source_node} -> {destination_node}"
+            )
+        delivered = ActivationEnvelope.from_bytes(received)
+        if delivered.destination_node != destination_node:
+            raise RuntimeError("activation destination changed during transport")
+        delivered.metadata["transfer_ms"] = (time.perf_counter() - started) * 1000.0
+        delivered.metadata["wire_bytes"] = len(raw)
+        return delivered
 
     async def _run_task(self, task: Task) -> Optional[GenerationResult]:
         """下发任务到节点引擎并回收结果。"""
@@ -124,7 +199,13 @@ class TaskScheduler:
             result = await engine.generate(task)
             task.mark("done")
             task.finish_time = time.time()
-            # 结果里的新 KV 块登记进 KVStore
+            # 结果里的新 KV 块登记进 KVStore。真实后端可以只返回 ids，
+            # CPU 模拟器则返回带位置/层区间的完整块。
+            for block in result.kv_blocks:
+                self._kv_blocks[block.block_hash] = block
+                if block.block_hash not in result.kv_block_ids:
+                    result.kv_block_ids.append(block.block_hash)
+                await self.storage.save(block, f"{task.node_id}:gpu")
             for bid in result.kv_block_ids:
                 block = self._kv_blocks.get(bid)
                 if block:
@@ -156,7 +237,15 @@ class TaskScheduler:
 
     async def _on_node_left(self, event: Event) -> None:
         """节点离开：迁移策略决定该节点上的 KV/参数去向。"""
+        if event.timestamp and event.timestamp < self._event_subscription_time:
+            return
         node_id = event.node_id
+        if (
+            self.pipeline_controller is not None
+            and self.pipeline_controller.current_plan is not None
+            and node_id not in {p.node_id for p in self.pipeline_controller.current_plan.placements}
+        ):
+            return
         node = self.node_mgr.get(node_id)
         if node is None:
             return
@@ -177,10 +266,21 @@ class TaskScheduler:
             available_nodes=remaining,
         )
         await self.migration.execute(plan, storage=self.storage, transport=self.transport)
+        if self.pipeline_controller is not None:
+            await self.pipeline_controller.reconfigure_for_topology()
 
     async def _on_node_joined(self, event: Event) -> None:
         """节点加入：放置策略决定给新节点分配什么工作。"""
-        # 默认实现：新节点由上层（ReparallelizationPolicy 或手动）安排
+        if event.timestamp and event.timestamp < self._event_subscription_time:
+            return
+        if self.pipeline_controller is not None:
+            if (
+                self.pipeline_controller.current_plan is not None
+                and event.node_id in {p.node_id for p in self.pipeline_controller.current_plan.placements}
+            ):
+                return
+            await self.pipeline_controller.reconfigure_for_topology()
+            return
         logger.info(f"node joined, waiting for placement decision: {event.node_id}")
 
     # ---------- 工具 ----------
@@ -196,3 +296,9 @@ class TaskScheduler:
         block_size = 16
         blocks = [tokens[i:i+block_size] for i in range(0, len(tokens), block_size)]
         return [hash(tuple(b)) for b in blocks]
+
+    @staticmethod
+    def _prompt_len(prompt) -> int:
+        if prompt is None:
+            return 0
+        return len(prompt)

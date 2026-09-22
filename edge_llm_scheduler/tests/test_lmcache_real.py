@@ -1,10 +1,11 @@
-"""真实 LMCache 对接测试（torch CPU + 真实 LocalCPUBackend）。
+"""真实 LMCache CPU 存储测试（torch CPU + 真实 LocalCPUBackend）。
 
-验证：我们的 LMCacheStore 的 KV 存取逻辑对接**真实 LMCache 的 CPU 存储后端**。
+验证：真实 LMCache 的 CPU 存储后端可以在没有 GPU 的情况下独立运行。
 - 需要 torch + LMCache 可导入；否则 skip
 - 用官方测试基建（create_test_config/metadata/memory_obj，纯 CPU）创建真实后端
 
-这证明"我们的 KVStore 抽象能映射到真实 LMCache 存储"，而非仅契约测试。
+注意：LocalCPUBackend 是底层存储后端，不是 LMCacheEngine。第二个测试因此
+只验证真实后端的存取，不宣称已经完成 vLLM/LMCacheEngine 端到端接入。
 
 运行：PYTHONPATH="LMCache:." python -m pytest edge_llm_scheduler/tests/test_lmcache_real.py -v
 """
@@ -84,19 +85,13 @@ def test_real_lmcache_cpu_backend_store_retrieve():
 
 @pytest.mark.skipif(not REAL_AVAILABLE, reason="torch/LMCache 未就绪")
 def test_real_lmcache_engine_store_retrieve_via_adapter():
-    """我们的 LMCacheStore 适配层 + 真实 LMCache CPU 后端：save→load 通过。
-
-    这是关键测试：证明 LMCacheStore 的 KVStore 抽象能对接真实 LMCache 存储。
-    """
-    from edge_llm_scheduler.backends.lmcache_storage import LMCacheStore
+    """真实 LocalCPUBackend 的块存取；适配器契约另由 test_lmcache_store 覆盖。"""
     from edge_llm_scheduler.core.types import KVBlock
 
     backend = _create_real_cpu_backend()
     if backend is None:
         pytest.skip("真实 LMCache backend 不可用")
 
-    # 用 LMCacheStore 对接真实 backend 的引擎接口
-    store = LMCacheStore(lm_engine=backend)
     block = KVBlock(block_hash=1002, num_tokens=16, byte_size=2048)
 
     # save 用真实 backend 的 submit_put_task

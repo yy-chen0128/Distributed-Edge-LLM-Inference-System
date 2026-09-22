@@ -5,7 +5,7 @@
 
 from .types import (
     Node, NodeCapability, NodeState, NodeRole,
-    ModelSpec, ExpertSpec, ModelPlacement,
+    ActivationEnvelope, ModelSpec, ExpertSpec, ModelPlacement, PipelinePlan, StageAssignment,
     KVBlock, InferenceRequest, Task, GenerationResult,
     Event, EventType,
 )
@@ -16,12 +16,19 @@ from .node_manager import NodeManager
 from .model_manager import ModelManager
 from .task_scheduler import TaskScheduler, Engine
 from .request_flow import RequestFlow
+from .stage_runtime import StagePrepareResult, StageRuntime
+from .pipeline_controller import (
+    PipelineReconfigurationCoordinator,
+    ReconfigurationReport,
+    StateTransferRecord,
+)
 
 __all__ = [
     "Node", "NodeCapability", "NodeState", "NodeRole",
-    "ModelSpec", "ExpertSpec", "ModelPlacement",
+    "ActivationEnvelope", "ModelSpec", "ExpertSpec", "ModelPlacement", "PipelinePlan", "StageAssignment",
     "KVBlock", "InferenceRequest", "Task", "GenerationResult",
     "Event", "EventType",
     "KVStore", "Transport", "EventBus", "NodeManager",
-    "ModelManager", "TaskScheduler", "Engine", "RequestFlow",
+    "ModelManager", "TaskScheduler", "Engine", "RequestFlow", "StageRuntime", "StagePrepareResult",
+    "PipelineReconfigurationCoordinator", "ReconfigurationReport", "StateTransferRecord",
 ]

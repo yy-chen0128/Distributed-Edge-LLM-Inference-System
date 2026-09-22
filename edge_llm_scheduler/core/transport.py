@@ -25,8 +25,8 @@ class Transport(ABC):
         """把数据推送到目标节点。tag 用于标识内容类型（如 'kv_block:123'）。"""
 
     @abstractmethod
-    async def pull(self, src_node: str, tag: str) -> Optional[bytes]:
-        """从源节点拉取数据。没有则返回 None。"""
+    async def pull(self, node_id: str, tag: str) -> Optional[bytes]:
+        """从持有数据的节点取回 tag 对应的 payload。没有则返回 None。"""
 
     @abstractmethod
     async def measure_bandwidth(self, dst_node: str) -> float:

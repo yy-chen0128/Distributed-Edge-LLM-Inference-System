@@ -16,8 +16,13 @@ from ..core.transport import Transport
 
 logger = logging.getLogger(__name__)
 
-# 简单帧协议：4 字节长度前缀 + payload
+# 简单帧协议：4 字节长度前缀 + 操作码 + payload。
+# P: push(tag\0data), G: get(tag), R: get response(data), N: get miss。
 _HEADER = struct.Struct(">I")
+_PUSH = b"P"
+_GET = b"G"
+_RESPONSE = b"R"
+_MISS = b"N"
 
 
 class TCPTransport(Transport):
@@ -37,16 +42,32 @@ class TCPTransport(Transport):
 
     async def push(self, data: bytes, dst_node: str, tag: str) -> None:
         writer = await self._get_writer(dst_node)
-        payload = tag.encode() + b"\x00" + data
+        payload = _PUSH + tag.encode() + b"\x00" + data
         writer.write(_HEADER.pack(len(payload)) + payload)
         await writer.drain()
 
-    async def pull(self, src_node: str, tag: str) -> Optional[bytes]:
-        # 简单实现：push 过去再 pull 回来（对请求/响应场景）
-        # 更真实的实现是节点端维护 tag->data 映射，这里用回显
-        raise NotImplementedError(
-            "pull needs a request/response protocol; use push with ack for now"
-        )
+    async def pull(self, node_id: str, tag: str) -> Optional[bytes]:
+        """从目标节点取走一个 tag 的 payload（单消费者语义）。"""
+        host, port = self.nodes[node_id]
+        reader, writer = await asyncio.open_connection(host, port)
+        try:
+            payload = _GET + tag.encode()
+            writer.write(_HEADER.pack(len(payload)) + payload)
+            await writer.drain()
+            header = await reader.readexactly(_HEADER.size)
+            (length,) = _HEADER.unpack(header)
+            response = await reader.readexactly(length)
+            if response == _MISS:
+                return None
+            if not response.startswith(_RESPONSE):
+                raise RuntimeError("invalid TCP pull response")
+            return response[1:]
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, asyncio.CancelledError):
+                pass
 
     async def measure_bandwidth(self, dst_node: str) -> float:
         # 简化：返回配置值（真实应发探测包实测）
@@ -100,9 +121,21 @@ class TcpReceiver:
                 header = await reader.readexactly(_HEADER.size)
                 (length,) = _HEADER.unpack(header)
                 payload = await reader.readexactly(length)
-                tag, _, data = payload.partition(b"\x00")
-                self._store[tag.decode()] = data
-                logger.debug(f"tcp recv tag={tag} len={len(data)}")
+                operation, content = payload[:1], payload[1:]
+                if operation == _PUSH:
+                    tag, separator, data = content.partition(b"\x00")
+                    if not separator:
+                        raise ValueError("invalid TCP push payload")
+                    self._store[tag.decode()] = data
+                    logger.debug(f"tcp recv tag={tag} len={len(data)}")
+                elif operation == _GET:
+                    tag = content.decode()
+                    data = self._store.pop(tag, None)
+                    response = _MISS if data is None else _RESPONSE + data
+                    writer.write(_HEADER.pack(len(response)) + response)
+                    await writer.drain()
+                else:
+                    raise ValueError("unknown TCP transport operation")
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         finally:

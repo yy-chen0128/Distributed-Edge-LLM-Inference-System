@@ -111,7 +111,8 @@
    vLLM `CompletionRequest`。
 2. **真实对接测试脚本**：`test_lmcache_real.py`（真实 LMCacheEngine CPU 模式）、
    `test_vllm_real.py`（真实 vLLM 离线 LLM() + dummy 权重）——检测到 torch/vllm 就自动跑，
-   否则 skip。当前 62 passed + 3 skipped。
+   否则 skip。该记录反映当时的阶段性快照；当前完整测试以
+   `docs/plan/current-work-and-roadmap.md` 中记录的结果为准。
 
 **环境就绪后**（torch 装好）：这两个测试自动生效，即可真实验证对接。
 修复 torch 建议：`pip install torch --index-url https://download.pytorch.org/whl/cpu`

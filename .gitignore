@@ -37,3 +37,27 @@ venv/
 *.log
 *.tmp
 .DS_Store
+
+# ===== 本机/大文件：绝不入库 =====
+# 模型权重与 HF 缓存（几百 MB ~ 十几 GB；各机自行用 scripts/hf_mirror_download.py 下载）
+/.models/
+/.hf/
+*.safetensors
+*.part
+
+# 凭据：agent 专用 SSH 私钥、known_hosts —— 一旦入库等于泄漏
+/.ssh/
+*_ed25519
+id_rsa*
+known_hosts
+
+# 本地虚拟环境与包缓存（在 WSL 原生盘即可，不入库）
+/.venvs/
+/.venv-gpu/
+/.pipcache/
+/pipcache/
+
+# 运行时产物与桥接临时目录
+/.wslbridge/
+/.logs/
+
