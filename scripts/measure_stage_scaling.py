@@ -219,11 +219,17 @@ async def main():
     print(f"   stage-0 extra (embedding table): "
           f"{(small['param_bytes'] - per_layer_bytes * 6) / 1e6:.1f} MB")
 
-    per_layer_7b = (4 * 3584 ** 2 + 3 * 3584 * 18944) * 2
+    # Qwen2.5-7B-Instruct 每层参数（从下载的 config.json 核对）：
+    #   hidden=3584, intermediate=18944, num_attention_heads=28,
+    #   num_key_value_heads=4, head_dim=128  -> GQA，注意 k/v 投影只有 4 个头
+    #   attn = h*h + 2*h*(kv_heads*head_dim) + h*h
+    #   mlp  = 3*h*intermediate
+    per_layer_7b = (3584 * 3584 + 2 * 3584 * (4 * 128) + 3584 * 3584
+                    + 3 * 3584 * 18944) * 2
     ratio = per_layer_7b / per_layer_bytes
     c1_7b = c1_per_layer * ratio
     print(f"\n   Qwen2.5-7B per-layer weights = {per_layer_7b / 1e6:.1f} MB "
-          f"(28 layers, bf16) -> {ratio:.1f}x of 0.5B")
+          f"(28 layers, GQA 4 kv heads, bf16) -> {ratio:.1f}x of 0.5B")
     print(f"   break-even prompt tokens (framework overhead == model work):")
     print(f"     0.5B: {c0_per_layer / c1_per_layer:>6.0f} tokens")
     print(f"     7B:   {c0_per_layer / c1_7b:>6.0f} tokens")

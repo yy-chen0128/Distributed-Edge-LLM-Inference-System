@@ -29,10 +29,17 @@ DEFAULT_MODELS = [
 ]
 ENDPOINT = "https://hf-mirror.com"
 
+# 镜像站会拦默认的 "Python-urllib/3.x" UA（实测 403），必须伪装成浏览器。
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
 
 def fetch_config(repo: str, endpoint: str, timeout: float) -> dict:
     url = f"{endpoint}/{repo}/resolve/main/config.json"
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 

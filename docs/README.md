@@ -62,7 +62,8 @@ docs/
 | **kernels-attention-and-memory-primer.md** | 概念参照 + 成熟方向现状：融合/图优化在做什么、FA2/3/4 分代、FlexAttention、稀疏与 KV 驱逐、批 vs 数据并行、权重流式加载/P2P 分发/多级 KV；LMCache 自研算子层清单 |
 | **l2-l3-customization-and-reuse.md** | **vLLM/LMCache 的自定义边界与复用评估**：免 fork 扩展点、KV Connector 层粒度接口、能力矩阵（一个实例能持有/改变什么）、必须 fork 的部分、L2 架构门槛 |
 | **policies-principles-and-testability.md** | **已实现策略的原理、实现与可测性**：5 条主策略的判据/算法/参数/代码位置，实跑证据（E2 命中率 0.321→0.962、切层 3/4/5、迁移预算表），哪些数字可信哪些不可信，8 项实现缺陷的修复状态 |
-| **real-workload-datasets.md** | **真实负载数据集选型**：四类信号（到达/前缀共享/长度分布/churn）各自的最佳来源，逐个核对字段与许可，前缀共享与命中率的可引用数字（Preble 85–97%、Mooncake 0.30–0.51、Codex 94.2%），门控与质量坑，以及"公开数据里没有节点 churn"这一负面结论 |
+| **real-workload-datasets.md** | **真实负载数据集选型**：四类信号（到达/前缀共享/长度分布/churn）各自的最佳来源，逐个核对字段与许可，前缀共享与命中率的可引用数字（Preble 85–97%、Mooncake 0.30–0.51、Codex 94.2%），门控与质量坑，以及"公开数据里没有节点 churn"这一负面结论；附模型规模/量化选型 |
+| **parameter-and-kv-management-status.md** | **参数与 KV 管理的实现状态（写给不读代码的人）**：每个概念先给定义（token/prefill/decode/KV/层/词表/progress_tokens），再指出代码里的名字，最后给"实现了/只有数据结构/完全没有"三档结论；含 progress_tokens 为何失效、KV 迁移缺哪座桥、分页要不要自己做、MoE 专家卸载、词表切分，以及 7B 在四机上的实测算表 |
 | **vllm-edge-integration.md** / **vllm-source-modification-plan.md** | vLLM 与边缘分层系统的集成边界 / 源码级动态调度改造评估 |
 | **ascend-deployment-assessment.md** | 昇腾云算力部署评估（已不进入当前实验主线） |
 | **nvidia-pair-analysis.md** | NVIDIA Personal AI Router 技术分析：定位、调度了什么、PP/TP/DP 归属、节点能力判定、带宽与节点离开、请求全流程（与我们的系统作对照） |
