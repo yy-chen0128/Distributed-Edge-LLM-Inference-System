@@ -2,6 +2,12 @@
 
 本目录整理 `research/` 的调研成果，按主题分类。完整原始文件仍在 `research/`。
 
+> **只读一份的话读这份** →
+> [`research/inference-optimization-understanding.md`](research/inference-optimization-understanding.md)
+> 《推理优化：我们的理解、要解决的问题与可能路径》——会议用总纲：全貌五层地图、四个硬约束与 D1–D6、
+> 已确立的实测结论（PP 不降延迟、两端固定开销、TP 弱网不可行…）、8 条可能路径与各自代价、
+> 与 vLLM/LMCache/PAIR 等系统的分工、待决问题。
+
 ## 目录结构
 
 ```
@@ -36,6 +42,7 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | **framework-design.md** | 框架设计说明：架构分层、接口设计、机制vs策略、三层验证 |
+| **inference-optimization-understanding.md** ★ | **会议用总纲**：推理优化五层全貌、我们系统的四个硬约束与 D1–D6、已确立的实测结论、8 条可能路径与代价、与已有系统的分工、待决问题、术语表 |
 | **simulation-feasibility.md** | 模拟测试可行性：论文数据集、LMCache/vLLM 无 GPU 模拟、真实对接现状 |
 | **literature-notes.md** | 文献笔记：70 篇论文主题聚类 + 跨论文综合洞察 |
 | **moe-literature.md** | MoE 方向文献：EP 专家并行、KV+专家联合路由、13 篇新下载 |

@@ -19,6 +19,10 @@ version : 2.13.0+cpu        ← 纯 CPU 版，cuda_available=False
 **结论：那个 CPU torch 在 Windows 侧**（Windows 自带的 Python 3.12）。我前面跑的所有测试、
 脚本、验证，用的都是这个 Windows Python——**WSL 里根本没装 torch**。
 
+> **更新（已执行）**：Windows 侧那份 CPU torch **已经卸载**（现在 `import torch` 报
+> `ModuleNotFoundError`），并且已定案**只保留 WSL 一套环境**（见 1.2）。
+> 下面这段记录的是当时的现状，保留作为诊断依据。
+
 ### 1.2 Windows Python 与 WSL Python 是两套完全独立的环境
 
 | | Windows 侧 | WSL 侧 |
@@ -36,12 +40,14 @@ version : 2.13.0+cpu        ← 纯 CPU 版，cuda_available=False
 | vLLM / SGLang / LMCache（**只能 Linux**） | **WSL 的 Python** | 进 WSL：`python3 -m pip install torch --index-url .../cu124` 然后 `pip install vllm` |
 | 两边都想跑 | 两边各装一份 | 注意**磁盘**：CUDA 版 torch 安装后约 7GB/份 |
 
-**建议**：
-- **主力装在 WSL**（vLLM/LMCache 只有这里能跑，且 Linux 下没有控制台编码/防火墙那些麻烦）；
-- Windows 侧**也装一份 GPU torch**，方便快速跑我们的 agent 和脚本（避免 `D:\` 经 `/mnt/d` 访问时的 I/O 慢）；
+**建议（已定案）**：
+- **只在 WSL 装一套**：`~/venvs/pair`，torch **2.6.0+cu124**，已验证 `cuda.is_available()==True`
+  （GPU 直通用 `/usr/lib/wsl/lib/nvidia-smi` 查看，WSL 内不要装驱动）。vLLM/LMCache 只有 Linux 能跑。
+- **Windows 侧那份 CPU torch 已卸载**，不再两边各留一份——CUDA 版 torch 安装后约 7GB/份，双份纯属浪费。
 - **不要装 CUDA Toolkit（nvcc）**：跑 PyTorch 不需要；只有从源码编译 vLLM/LMCache 的
   C++/CUDA 扩展才需要（vLLM 用预编译 wheel、LMCache 用 `NO_CUDA_EXT=1` 都能绕开）。
-- 换 torch 前先卸载 CPU 版：`python -m pip uninstall -y torch`（避免残留混装）。
+- 装 torch **不必先卸载**：`pip install --index-url .../cu124` 是先下载后替换，中途失败不影响旧环境；
+  只有想彻底清干净时才 `pip uninstall -y torch`。
 
 ### 1.3 一个坑：仓库在 D:\ 上，在 WSL 里访问会慢
 
@@ -51,6 +57,19 @@ WSL 通过 `/mnt/d/...` 访问 Windows 盘是走 9P 协议，**小文件随机 I
 - **省事**：代码放 `/mnt/d/...` 直接用（可接受，但 pytorch 的 import 会明显变慢）；
 - **快**：把代码 `cp -r` 到 WSL 内部（如 `~/work/project`），Windows 侧改动用 `git` 或 `rsync` 同步。
   模型权重则相反：**放在 Windows 的 D 盘**（`/mnt/d/models`），因为 WSL 内部磁盘在本机 C 盘上、且会膨胀。
+
+**本项目现状（已采用的折中：代码不搬，只软链）**：
+- 代码留在 `D:\Newproject\分布式算力\project`（Windows 侧编辑方便）；
+- 在 WSL 里建 ASCII 软链指向它，之后统一用 `~/pair`：
+
+  ```bash
+  PROJ="$(find /mnt/d/Newproject -maxdepth 2 -type d -name project | head -1)"
+  ln -sfn "$PROJ" "$HOME/pair"
+  ```
+
+- venv 放 WSL 原生盘（`~/venvs/pair`）、模型放 `/mnt/d`，**都不进 vhdx**。
+- 实测代价：从 `/mnt/d` 读 0.5B 权重做 `prepare_epoch` 约 **2–6s/段**（比 Windows 原生略慢），可接受；
+  若以后跑 7B（15GB）觉得慢，再考虑把模型复制进 WSL 或换外置 SSD。
 
 ---
 

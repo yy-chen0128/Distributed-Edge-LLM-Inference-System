@@ -1,4 +1,9 @@
-# 论文分析参考（独立 git 仓库，不作为运行时依赖入库）
+# 论文分析参考（第三方代码，独立仓库，不作为运行时依赖入库）
+#   vllm / LMCache 是上游源码快照：我们只"读"它们来评估复用边界，没有 hack/修改。
+#   即使将来要改，也另开独立仓库，不放进本项目。
+#   上游地址与版本见 docs/deploy/project-structure-and-build.md
+/vllm/
+/LMCache/
 /spotserve/
 /moe-infinity/
 /preble/
