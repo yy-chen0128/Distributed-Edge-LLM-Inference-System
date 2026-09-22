@@ -258,7 +258,19 @@ class HFLayeredEngine(StageRuntime):
         if start == 0:
             tokens = self._token_ids(task.prompt)
             if task.progress_tokens > 0:
-                tokens = tokens[-1:]
+                if self._has_cache(task.request_id):
+                    # 真续算：本进程还持有该请求的 past_key_values，
+                    # 推进一个 token 即可（这才是 TokenRecovery 想省的算）。
+                    tokens = tokens[-1:]
+                else:
+                    # 恢复目标换了节点、或引擎重启过 → 本地没有该请求的 KV。
+                    # 此时只喂最后一个 token 会让模型看一个 1-token 序列，
+                    # 输出相对原上下文是错的；退回整段重算：慢，但正确。
+                    self.log(
+                        f"[{self.node_id}] resume {task.request_id} has no local KV "
+                        f"cache (progress_tokens={task.progress_tokens}); "
+                        f"recomputing the full prompt"
+                    )
             t0 = time.perf_counter()
             out = self._forward(tokens=None, token_ids=tokens, request_id=task.request_id)
         else:
@@ -493,6 +505,20 @@ class HFLayeredEngine(StageRuntime):
             cache = DynamicCache(config=self.config)
             self._caches[key] = cache
         return cache
+
+    def _has_cache(self, request_id: str) -> bool:
+        """本进程是否**已经有内容**的该请求 KV cache。
+
+        token 级恢复能不能真的少算，取决于这一点：cache 不在（换了节点、
+        引擎重启）时按最后一个 token 续算是错的。
+        """
+        cache = self._caches.get((self._active_epoch or 0, request_id))
+        if cache is None:
+            return False
+        try:
+            return int(cache.get_seq_length()) > 0
+        except Exception:  # noqa: BLE001 - 不同 transformers 版本接口不一
+            return True
 
     def _materialize_shard(self, start: int, end: int) -> tuple[Any, dict]:
         """建元骨架 + 只加载 [start,end) 的权重。"""

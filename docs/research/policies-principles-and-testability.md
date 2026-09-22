@@ -15,7 +15,7 @@
 | 现在能测效果吗 | **能测三种东西**：路由选择差异（E2 的命中率）、切层划分（算力比例）、恢复/迁移的**语义正确性** |
 | 能测端到端收益吗 | **不能**。仿真没有负载回馈，也没把策略接到真实流水线上——见 §6 |
 | 仿真里的 `load_std` 可信吗 | **不可信**，是并列取首的产物，不是均衡效果——见 §5.2 |
-| 有没有实现缺陷 | 有。1 个可复现崩溃 + 1 处注释与实现不符 + 3 处语义只做了一半——见 §7 |
+| 有没有实现缺陷 | 查出 8 处，**已全部修复**（含 2 处语义变更：迁移成本含链路、`reuse_count=0` 的估值）——见 §7 |
 
 一句话：**策略的"机制"已经可测，"收益"还不可测**。二者之间差的不是算法，是三处接线。
 
@@ -323,7 +323,14 @@ result=[layered mock output from node_2] tokens=8 stages=3
 
 （`test_e2_placement` / `test_capability_placement` / `test_priority_migration` /
 `test_reparallelization_recovery` / `test_pipeline_reconfiguration`）
-全量套件此前测得 **86 passed, 3 skipped**（跳过项：LMCache ×2、vLLM ×1，因为对应库未装）。
+
+**全量套件**（含 §7 八处修复的回归测试 `test_policy_fixes.py`）：
+
+```
+92 passed, 3 skipped in 17.29s
+```
+
+跳过项：LMCache ×2、vLLM ×1（对应库未装）。
 
 ---
 
@@ -377,18 +384,26 @@ result=[layered mock output from node_2] tokens=8 stages=3
 
 ---
 
-## 7. 实现缺陷清单（均可复现）
+## 7. 实现缺陷清单与修复状态
 
-| # | 位置 | 问题 | 证据 | 建议 |
+全部已修复，回归测试在 `edge_llm_scheduler/tests/test_policy_fixes.py`（每条对应一个测试）。
+
+| # | 位置 | 问题 | 修法 | 副作用 / 注意 |
 |---|---|---|---|---|
-| 1 | `placement.py:133` | **可复现崩溃**：`prompt=None` 且 `hit_tokens>0` 时 `prefix_hashes` 未绑定，抛 `UnboundLocalError`（`prefix_hashes` 只在 `:118-122` 的 `prompt is not None` 分支里赋值，但 `:131` 的 explore 判据只要求 `store is not None`） | 探针 §8[E]：`RAISED UnboundLocalError: cannot access local variable 'prefix_hashes'` | 在函数开头初始化为 `[]`；或把判据加上 `request.prompt is not None` |
-| 2 | `reparallelization.py:74` | 注释"余数给权重最大的"与实现（小数部分最大）不符 | 探针 §8[A]：`100/150/200 → 3/4/5`，余数给了权重**最小**的 n0 | 改注释（实现是对的） |
-| 3 | `migration.py:249-254` | 目标分配不分摊：所有块去同一个节点（静态 load + 并列取首） | 探针 §8[B]：4 个块全部 `→ n1:gpu`，`n2` 未获得任何块 | 分配循环里维护局部已分配字节/块数 |
-| 4 | `mock_storage.py:82-83` | `estimate_move_cost` 忽略 `src`/`dst`；`NodeCapability.bandwidth` 在迁移路径上从未被使用 | 探针 §8[C]：1 MB 块恒为 10.000 ms | 成本模型引入链路（至少区分跨机/本机） |
-| 5 | `migration.py:167` | `priority = reuse_count × prefill_time_ms`，`reuse_count=0` 的块优先级恒 0，无论重算多贵 | §2.3 表：块 14（`prefill=99ms`, `reuse=0`）priority=0，deadline 紧时最先丢 | 明确这是否是有意设计；若要保"贵但不可复用"的块，需另立判据 |
-| 6 | `recovery.py:76-84` + `hf_layered_engine.py:487-495` | 跨节点恢复只带字段不带数据：目标节点 `_cache_for` 建空 cache，stage 0 只喂最后一个 token → 语义错误 | 代码路径确定（§2.5） | 实现真实 KV 装载后再启用 `resume_node_id`；当前应把跨节点路径标为不可用 |
-| 7 | `task_scheduler.py:256-261` | 恢复出的 retry task 结果被丢弃：中断请求的结果不回传、`self._results` 不更新 | 代码阅读（§3） | 回填结果或发事件 |
-| 8 | `task_scheduler.py:131` + 三个引擎 | `hit_tokens` 被调度器对所有段覆盖为同一值，引擎又各自重新纠正为"只 stage 0" | 代码阅读（§2.6） | 收敛到一处，删除重复判定 |
+| 1 | `placement.py` | **可复现崩溃**：`prompt=None` 且 `hit_tokens>0` 时读未绑定的 `prefix_hashes`，抛 `UnboundLocalError` | 函数开头初始化 `prefix_hashes: List[int] = []`，并在 exploit 判据里加 `and prefix_hashes` | 无 |
+| 2 | `reparallelization.py:74` | 注释"余数给权重最大的"与实现（小数部分最大）不符 | 改注释为"最大余数法" | 无（实现本来就是对的） |
+| 3 | `migration.py` `_assign_target` | 所有块落到同一个目标节点（静态 `load` 并列时 `min` 取列表第一个） | 引入本次分配账本 `assigned_bytes`，评分 = `load + 已分配字节/剩余显存` | 分配会摊开；同等负载下不再全压一个节点 |
+| 4 | `mock_storage.py` `estimate_move_cost` | 完全忽略 `src`/`dst`，本机与跨机同价；`NodeCapability.bandwidth` 在迁移路径上从未被使用 | 传输按两端较慢链路算，跨机加一次 RTT；新增 `link_bandwidth_mbps` / `link_rtt_ms` / `local_rtt_ms=0.14` / `remote_rtt_ms=5.0`（取自本机 loopback 实测与 WiFi 分档） | **成本变大**：跨机一块 1000B 从 0.01ms 变成 ~5.01ms。两个依赖旧硬编码预算的测试改为按 storage 报的实际成本定预算 |
+| 5 | `migration.py` priority 公式 | `reuse_count=0` 的块优先级恒为 0，再贵也最先丢 | 新增 `min_reuse_count`（默认 **1**）：显存里存在的块至少被用过一次，按"未来至少再用一次"估值。实测 `reuse=0,prefill=99`（99）现在优先于 `reuse=9,prefill=10`（90） | **语义变更**，论文里要说明；设 `min_reuse_count=0` 可退回 Preble 原式 |
+| 6 | `hf_layered_engine.py` | 跨节点恢复只带字段不带数据：目标节点 `_cache_for` 建**空** cache，stage 0 仍只喂最后一个 token → 输出语义错误 | 新增 `_has_cache()`；cache 不存在时**退回整段重算**并打日志（慢但正确） | 跨节点恢复现在是"正确但慢"，不是"快但错" |
+| 7 | `task_scheduler.py` `_on_node_left` | 恢复出的 retry 结果被丢弃，中断请求的结果不回传、`self._results` 不更新 | 回填 `self._results[request_id]` 并发 `TASK_DONE` 事件 | 恢复动作第一次变得可观测 |
+| 8 | `task_scheduler.py:131` + 三个引擎 | `hit_tokens` 被调度器对**所有**段覆盖为同一值 | 统一到调度器：`hit_tokens = hit if index == 0 else 0`；引擎侧的重判保留为冗余保险 | 行为不变（引擎本来就会纠正），但不再是两处各判一次 |
+
+**⚠️ 仍未闭合的一条（不是可修的 bug，是缺的能力）**：`hf_layered_engine.generate` 把"从 `progress_tokens` 续算"
+近似为"只喂 `task.prompt` 的最后一个 token"。这只有在**恢复时 `task.prompt` 已经是"到中断点为止的完整序列"**
+时才正确；控制器目前并没有把已生成的 token 拼回 prompt。所以跨节点恢复这条路径，
+**字段传递对了、引擎侧不再产生错误输出，但"少算"的收益还没真正拿到**——
+要拿到必须补一条真实的 KV 传输/装载路径（与 §6 表里的真实 KV 迁移是同一件事）。
 
 ---
 

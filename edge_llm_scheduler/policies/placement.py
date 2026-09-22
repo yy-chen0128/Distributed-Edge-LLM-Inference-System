@@ -115,6 +115,10 @@ class E2Placement(PlacementPolicy):
 
         # ① 前缀匹配：查全局 KV 索引，找最长连续命中
         matched_tokens = 0
+        # 必须先初始化：prompt 为 None 时下面的分支不会赋值，但 ② 的
+        # exploit 判据（matched_tokens > remaining_tokens）在调用方通过
+        # hit_tokens 传入命中数时仍可能成立，随后会读 prefix_hashes。
+        prefix_hashes: List[int] = []
         if store is not None and request.prompt is not None:
             prefix_hashes = self._hash_prompt(request.prompt)
             if prefix_hashes:
@@ -128,7 +132,7 @@ class E2Placement(PlacementPolicy):
         remaining_tokens = max(0, self._prompt_len(request) - matched_tokens)
 
         # ② exploit/explore 决策
-        if matched_tokens > remaining_tokens and store is not None:
+        if matched_tokens > remaining_tokens and store is not None and prefix_hashes:
             # EXPLOIT：在持有命中前缀缓存的节点里选负载最轻的
             holders = await self._find_hit_holders(store, prefix_hashes, matched_tokens // self.block_size_tokens)
             candidates = [n for n in nodes if n.node_id in holders and n.state.load < self.load_threshold]

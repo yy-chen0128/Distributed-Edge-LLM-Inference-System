@@ -124,11 +124,13 @@ class TaskScheduler:
             model=None, nodes=nodes, request=req, storage=self.storage, hit_tokens=hit
         )
         # 让所有后端都使用正式 Task 字段；兼容旧的第三方 PlacementPolicy。
+        # hit_tokens 只给第一段：其余段吃的是 activation，没有 prompt，命中无意义
+        # （三个引擎本来也各自重判这一点，这里统一到调度器，避免两处各判一次）。
         for index, task in enumerate(tasks):
             task.prompt = req.prompt
             task.max_tokens = req.max_tokens
             task.prompt_len = self._prompt_len(req.prompt)
-            task.hit_tokens = hit
+            task.hit_tokens = hit if index == 0 else 0
             task.stage_index = index
             task.stage_count = len(tasks)
         return tasks
@@ -258,7 +260,19 @@ class TaskScheduler:
             if task:
                 retry = await self.recovery.recover(task)
                 if retry is not None:
-                    await self._run_task(retry)
+                    recovered = await self._run_task(retry)
+                    # 恢复出来的结果必须留痕：否则"恢复了"这件事没有任何地方
+                    # 能观测到，中断请求的调用方永远等不到结果。
+                    if recovered is not None:
+                        self._results[retry.request_id] = recovered
+                        if self.event_bus:
+                            await self.event_bus.publish(
+                                Event(type=EventType.TASK_DONE,
+                                      request_id=retry.request_id,
+                                      node_id=retry.node_id,
+                                      timestamp=time.time(),
+                                      payload=recovered)
+                            )
         # 迁移计划：决定哪些 KV 块传走、传哪（可用目标 = 剩余健康节点）
         remaining = [n for n in self.node_mgr.alive_nodes() if n.node_id != node_id]
         plan = await self.migration.decide(

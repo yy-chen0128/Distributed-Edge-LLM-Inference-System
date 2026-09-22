@@ -25,6 +25,13 @@ class MockKVStore(KVStore):
         self._prefix_order: List[int] = []
         # 默认带宽（用于估算迁移耗时）
         self.bandwidth_mbps: float = 100.0
+        # 链路特征（可选覆盖）：node_id -> 带宽 MB/s / RTT ms。
+        # 默认值取自本机实测：loopback RTT 0.14ms（experiments/measure_link.py），
+        # 跨机按典型 WiFi 5ms 计（见 docs/deploy/runbook-4-laptops.md 的链路分档）。
+        self.link_bandwidth_mbps: Dict[str, float] = {}
+        self.link_rtt_ms: Dict[str, float] = {}
+        self.local_rtt_ms: float = 0.14
+        self.remote_rtt_ms: float = 5.0
 
     async def save(self, block: KVBlock, location: str) -> None:
         if block.data is None:
@@ -80,7 +87,27 @@ class MockKVStore(KVStore):
         return {bid: list(locs.keys()) for bid, locs in self._store.items()}
 
     async def estimate_move_cost(self, block: KVBlock, src: str, dst: str) -> float:
-        return block.byte_size / max(1.0, self.bandwidth_mbps) * 0.001  # ms
+        """搬迁一块 KV 的预估耗时（ms）。
+
+        原实现只按 byte_size / bandwidth_mbps 算，**完全忽略 src/dst**，于是
+        "跨机"和"本机"同价——用这种成本去分配 deadline 预算，就等于没有链路模型。
+        现在：传输按两端较慢的链路算，跨机再加一次 RTT（同机用 loopback RTT）。
+        """
+        bandwidth = min(self._link_bandwidth(src), self._link_bandwidth(dst))
+        transfer_ms = block.byte_size / max(1.0, bandwidth) * 0.001
+        if self._node_of(src) == self._node_of(dst):
+            return transfer_ms + self.local_rtt_ms
+        return transfer_ms + self._link_rtt(self._node_of(dst))
+
+    @staticmethod
+    def _node_of(location: str) -> str:
+        return (location or "").split(":")[0]
+
+    def _link_bandwidth(self, location: str) -> float:
+        return self.link_bandwidth_mbps.get(self._node_of(location), self.bandwidth_mbps)
+
+    def _link_rtt(self, node_id: str) -> float:
+        return self.link_rtt_ms.get(node_id, self.remote_rtt_ms)
 
     def _has_block(self, block_hash: int, locations: Optional[List[str]]) -> bool:
         if block_hash not in self._store:

@@ -71,7 +71,7 @@ class CapabilityReparallelization(ReparallelizationPolicy):
         total_flops = sum(max(1.0, n.capability.compute_flops) for n in alive)
         weights = {n.node_id: max(1.0, n.capability.compute_flops) / total_flops for n in alive}
 
-        # 按权重分配层数（整数化，把余数给权重最大的）
+        # 按权重分配层数（整数化，余数按小数部分从大到小补——最大余数法）
         num_layers = model.num_layers
         raw = {nid: w * num_layers for nid, w in weights.items()}
         assigned = {nid: int(r) for nid, r in raw.items()}

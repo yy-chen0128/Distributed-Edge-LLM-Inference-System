@@ -125,13 +125,20 @@ class PriorityMigration(MigrationPolicy):
     """PT×N 优先级迁移：按 KV 块价值降序传，时间受限时只传部分。
 
     价值公式（参考 Preble 驱逐价值 M_i = Σ PT_j × N_j）：
-        priority(block) = reuse_count × prefill_time_ms
+        priority(block) = max(min_reuse_count, reuse_count) × prefill_time_ms
     - reuse_count: 历史共享请求数（热度）
     - prefill_time_ms: 重算这段 KV 的 prefill 耗时（越长越贵）
 
-    时间预算：deadline_ms × bandwidth_mbps → 可传总字节。按价值降序，预算用完即丢。
+    min_reuse_count（默认 1）修正了原公式的一个偏差：`reuse_count=0` 的块
+    优先级恒为 0，无论重算多贵都会最先被丢。但一个"在显存里存在"的块至少
+    被用过一次，把它当作"未来至少还会用一次"更合理，否则等于假设长 prompt
+    从不复用——而长 prompt 恰恰是重算最贵的。设 0 可退回原公式。
 
-    block_drop_hook: 可选回调，用于丢弃块时做记录（如补发 KV_MISS 事件）。
+    时间预算：deadline_ms × 带宽 → 可传总字节。按价值降序，预算用完即丢。
+    成本由 storage.estimate_move_cost 给出（它知道链路）；storage 没有该
+    接口时退回本策略的 bandwidth_mbps 线性估算。
+
+    target_check_fn: 可选回调，用于过滤目标节点（显存够等）。
     """
 
     def __init__(
@@ -139,9 +146,11 @@ class PriorityMigration(MigrationPolicy):
         deadline_ms: float = float("inf"),
         bandwidth_mbps: float = 100.0,
         target_check_fn: Optional[callable] = None,
+        min_reuse_count: int = 1,
     ) -> None:
         self.deadline_ms = deadline_ms
         self.bandwidth_mbps = bandwidth_mbps
+        self.min_reuse_count = max(0, int(min_reuse_count))
         # 目标节点过滤回调：输入 Node，返回该节点能否接收一块 KV（显存够等）
         self.target_check_fn = target_check_fn or (lambda n: n.state.memory_free > 0)
 
@@ -164,7 +173,7 @@ class PriorityMigration(MigrationPolicy):
             if block is None:
                 plan.block_drops.append(bid)
                 continue
-            priority = block.reuse_count * block.prefill_time_ms
+            priority = max(self.min_reuse_count, block.reuse_count) * block.prefill_time_ms
             valued.append((block, priority))
 
         # ② 按价值降序
@@ -175,13 +184,16 @@ class PriorityMigration(MigrationPolicy):
 
         # ④ 时间受限：预算（毫秒）内按价值传，超预算丢
         budget_ms = self.deadline_ms
+        # 本次分配账本：负载是心跳里的静态值，不会因为刚分配了块而变，
+        # 不记账就会把所有块都塞给同一个节点（并列时 min 取列表第一个）。
+        assigned_bytes: Dict[str, int] = {}
         for block, priority in valued:
-            dst = self._assign_target(block, targets)
+            dst = self._assign_target(block, targets, assigned_bytes)
             if dst is None:
                 plan.block_drops.append(block.block_hash)
                 continue
             src = self._find_source_location(index, block.block_hash, node_id)
-            cost_ms = await storage.estimate_move_cost(block, src, dst)
+            cost_ms = await self._move_cost(storage, block, src, dst)
             if cost_ms <= budget_ms:
                 plan.block_moves.append({
                     "block_hash": block.block_hash,
@@ -246,9 +258,32 @@ class PriorityMigration(MigrationPolicy):
             return []
         return [n for n in available_nodes if n.state.alive and self.target_check_fn(n)]
 
-    def _assign_target(self, block: KVBlock, targets: List[Node]) -> Optional[str]:
-        """选目标：负载最轻的健康节点。返回 location 字符串或 None。"""
+    async def _move_cost(self, storage: KVStore, block: KVBlock,
+                         src: str, dst: str) -> float:
+        """一块 KV 的搬迁耗时（ms）。优先用 storage 的成本模型（它知道链路）。"""
+        estimator = getattr(storage, "estimate_move_cost", None)
+        if estimator is not None:
+            return await estimator(block, src, dst)
+        return block.byte_size / max(1.0, self.bandwidth_mbps) * 0.001
+
+    def _assign_target(self, block: KVBlock, targets: List[Node],
+                       assigned_bytes: Dict[str, int]) -> Optional[str]:
+        """选目标：静态负载 + 本次已分配量占比 最小的健康节点。
+
+        `state.load` 是心跳值，在 decide() 期间不会更新；只用它会让所有块
+        落到同一个节点（并列时 min 取列表第一个）。因此叠加"本次已分配给该
+        节点的字节 / 其剩余显存"，让分配自然摊开。
+        返回 location 字符串或 None。
+        """
         if not targets:
             return None
-        t = min(targets, key=lambda n: n.state.load)
-        return f"{t.node_id}:gpu"
+
+        def score(n: Node) -> float:
+            free = max(1, int(n.state.memory_free))
+            return n.state.load + assigned_bytes.get(n.node_id, 0) / free
+
+        target = min(targets, key=score)
+        assigned_bytes[target.node_id] = (
+            assigned_bytes.get(target.node_id, 0) + max(1, int(block.byte_size))
+        )
+        return f"{target.node_id}:gpu"

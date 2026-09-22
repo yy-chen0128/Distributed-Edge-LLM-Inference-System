@@ -78,9 +78,13 @@ async def test_priority_migration_on_node_left():
     for nid in ["a", "b"]:
         await nm.register(make_node(nid, load=0.1))
 
+    # 成本模型含链路（跨机加一次 RTT），所以按 storage 报的单块成本设预算：
+    # 预算 = 1 块成本 × 1.5 → 只够传 1 块。
+    one_block_ms = await storage.estimate_move_cost(
+        KVBlock(block_hash=1, num_tokens=16, byte_size=1000), "a:gpu", "b:gpu")
     scheduler = TaskScheduler(
         node_manager=nm, storage=storage, event_bus=bus,
-        migration_policy=PriorityMigration(deadline_ms=0.01),  # 只够传 1 块
+        migration_policy=PriorityMigration(deadline_ms=one_block_ms * 1.5),
     )
     scheduler.attach_engine("a", MockEngine("a"))
     scheduler.attach_engine("b", MockEngine("b"))

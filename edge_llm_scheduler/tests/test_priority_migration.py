@@ -54,15 +54,18 @@ async def test_sorts_by_priority_desc():
 async def test_budget_drops_low_priority_blocks():
     """时间受限：只传高价值块，低价值被丢。"""
     storage = MockKVStore()
-    # 每块 cost = 1000B / 100MB/s × 0.001 = 0.01ms
     await storage.save(make_block(1, reuse=100, prefill_ms=50.0), "leave:gpu")  # 价值 5000
     await storage.save(make_block(2, reuse=100, prefill_ms=50.0), "leave:gpu")  # 5000
     await storage.save(make_block(3, reuse=1, prefill_ms=1.0), "leave:gpu")     # 1（低价值）
     await storage.save(make_block(4, reuse=1, prefill_ms=1.0), "leave:gpu")     # 1（低价值）
 
     nodes = [make_node("survivor")]
-    # deadline=0.01ms → 预算只够传 1 块（0.01ms）
-    policy = PriorityMigration(deadline_ms=0.01)
+    # 成本模型现在含链路（跨机要加一次 RTT），所以按 storage 报的实际成本设预算：
+    # 预算 = 1 块成本 × 1.5 → 只装得下 1 块。
+    one_block_ms = await storage.estimate_move_cost(
+        make_block(1, 100, 50.0), "leave:gpu", "survivor:gpu"
+    )
+    policy = PriorityMigration(deadline_ms=one_block_ms * 1.5)
     plan = await policy.decide("leave", [1, 2, 3, 4], storage, available_nodes=nodes)
 
     # 只传价值最高的 1 块，其余 3 块丢
