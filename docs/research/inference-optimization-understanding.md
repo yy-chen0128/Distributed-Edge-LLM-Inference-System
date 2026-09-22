@@ -64,7 +64,7 @@
 |---|---|---|
 | **装不下** | 7B fp16 需 15.2GB 权重；单台 8GB 卡装不下（更别说 4GB 卡） | `model_pp_fit.py` 实测每层 0.466GB、词表 1.09GB |
 | **显存紧** | KV 随上下文线性增长；4k 上下文 7B 需 0.23GB，14B 需 0.79GB | 同上；`cache_dtype`/按层跳过量化可缓解 |
-| **链路慢** | WiFi/千兆 vs NVLink：低 2–3 个数量级 | 本机 loopback 165MB/s、RTT 0.14ms（**真实 WiFi 待同学测**） |
+| **链路慢** | WiFi/千兆 vs NVLink：低 2–3 个数量级 | 本机 loopback 165MB/s、RTT 0.14ms（**真实 WiFi 尚未实测**） |
 | **节点会走** | 合盖/抱走/断网即离线；无 30s 宽限期 | 实测重切 4→3 节点耗时 2.15s、旧 epoch drain 0.76s |
 
 ### 2.2 六个子问题（研究问题清单）
@@ -290,7 +290,7 @@ K=1→2→4：吞吐 5.06 → 6.54 → 7.82 tok/s（**1.55×**），且 agent �
 
 ---
 
-## 8. 术语表（面向新同学）
+## 8. 术语表
 
 | 术语 | 含义 |
 |---|---|
@@ -320,5 +320,5 @@ K=1→2→4：吞吐 5.06 → 6.54 → 7.82 tok/s（**1.55×**），且 agent �
 | 实测数据与能力边界（PP/TP/KV/并发） | `docs/deploy/edge-4gpu-deployment-analysis.md` |
 | 四机整合与切层方案、分阶段计划 | `docs/deploy/four-laptop-integration-plan.md` |
 | 项目结构与构建方式 | `docs/deploy/project-structure-and-build.md` |
-| 环境配置（给同学） | `docs/deploy/environment-setup.md` |
+| 环境配置 | `docs/deploy/environment-setup.md` |
 | 当前进度与路线图 | `docs/plan/current-work-and-roadmap.md` |

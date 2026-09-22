@@ -15,6 +15,7 @@ docs/
 ├── research/          # 核心调研成果（文献分析、框架设计、模拟可行性、引擎复用评估）
 ├── plan/              # 项目规划（论文大纲、进度、阶段门、路线图）
 ├── deploy/            # 部署与实测（环境配置、四机整合、实测分析）
+├── design/            # 设计讨论（单机范围、批处理/微批方案）
 ├── sections/          # 论文章节（方法/技术方案）
 ├── evidence-map.md    # 证据地图（文献→研究问题的映射）
 ├── data-manifest.md   # 数据清单
@@ -26,10 +27,16 @@ docs/
 
 | 文档 | 内容 |
 |---|---|
-| **environment-setup.md** | **给每位同学的环境配置文档**：WSL2/Ubuntu 选型、GPU 与 venv、依赖、模型下载、起节点 agent、链路测量、常见坑、一页速查 |
+| **environment-setup.md** | **环境配置文档**：WSL2/Ubuntu 选型、GPU 与 venv、依赖、模型下载、起节点 agent、链路测量、常见坑、一页速查 |
 | **project-structure-and-build.md** | **项目结构与构建说明**：三层架构、两条执行轨道、目录职责、关键数据契约、四种运行方式、外部参考实现来源、仓库约定与文档地图 |
 | **four-laptop-integration-plan.md** | 四台笔记本整合计划：OS 决策、GPU 环境、模型选型（含"平均切失败/加权切成功"算例）、优化构件与复用情况、P0–P5 分阶段计划、风险清单 |
 | **edge-4gpu-deployment-analysis.md** | 真实部署实测分析：四段流水线数值正确性、分片足迹、成本模型、节点离开重配置、并发吞吐、异构切层、PP/TP 定量对比、实验方案 |
+
+## design/ — 设计讨论
+
+| 文档 | 内容 |
+|---|---|
+| **single-machine-scope-and-batching.md** | 单机还能做什么（8 项按性价比排序）+ 批处理/微批/DP 的概念区分、为什么该做批处理（固定开销 ≈ 计算量的实测推导）、要改的引擎/协议/控制器、验收口径、单机边界（四个 agent 共用一块 GPU） |
 
 ## 当前总文档
 
@@ -54,6 +61,7 @@ docs/
 | **inference-optimization-landscape.md** | **大模型推理优化路径全景**（五层地图、43 条路径的拥挤度与四卡可行性、算子/稀疏注意力/KV 专项的归属与追问） |
 | **kernels-attention-and-memory-primer.md** | 概念参照 + 成熟方向现状：融合/图优化在做什么、FA2/3/4 分代、FlexAttention、稀疏与 KV 驱逐、批 vs 数据并行、权重流式加载/P2P 分发/多级 KV；LMCache 自研算子层清单 |
 | **l2-l3-customization-and-reuse.md** | **vLLM/LMCache 的自定义边界与复用评估**：免 fork 扩展点、KV Connector 层粒度接口、能力矩阵（一个实例能持有/改变什么）、必须 fork 的部分、L2 架构门槛 |
+| **policies-principles-and-testability.md** | **已实现策略的原理、实现与可测性**：5 条主策略的判据/算法/参数/代码位置，实跑证据（E2 命中率 0.321→0.962、切层 3/4/5、迁移预算表），哪些数字可信哪些不可信，8 项实现缺陷清单 |
 | **vllm-edge-integration.md** / **vllm-source-modification-plan.md** | vLLM 与边缘分层系统的集成边界 / 源码级动态调度改造评估 |
 | **ascend-deployment-assessment.md** | 昇腾云算力部署评估（已不进入当前实验主线） |
 | **nvidia-pair-analysis.md** | NVIDIA Personal AI Router 技术分析：定位、调度了什么、PP/TP/DP 归属、节点能力判定、带宽与节点离开、请求全流程（与我们的系统作对照） |

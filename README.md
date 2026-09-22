@@ -2,9 +2,9 @@
 
 在边缘异构算力节点（消费级 GPU / 手机 / 边缘盒）上协作执行 LLM 推理的**管理调度层**。
 
-> **新同学从这里开始**
+> **入口文档**
 > 1. [`docs/deploy/project-structure-and-build.md`](docs/deploy/project-structure-and-build.md) —— 项目由什么构成、怎么跑、改动落在哪一层
-> 2. [`docs/deploy/environment-setup.md`](docs/deploy/environment-setup.md) —— 在自己笔记本上把环境配起来（Windows + WSL2 / Ubuntu）
+> 2. [`docs/deploy/environment-setup.md`](docs/deploy/environment-setup.md) —— 单机环境配置（Windows + WSL2 / Ubuntu）
 > 3. [`docs/deploy/four-laptop-integration-plan.md`](docs/deploy/four-laptop-integration-plan.md) —— 四机怎么整合、切层怎么定、分阶段计划
 
 ## 项目结构
@@ -90,7 +90,7 @@ python -m pytest edge_llm_scheduler/tests/test_lmcache_real.py -v   # 未装 lmc
 | 想知道什么 | 看哪份 |
 |---|---|
 | 项目结构与构建方式 | [`docs/deploy/project-structure-and-build.md`](docs/deploy/project-structure-and-build.md) |
-| 怎么配环境（给同学） | [`docs/deploy/environment-setup.md`](docs/deploy/environment-setup.md) |
+| 怎么配环境 | [`docs/deploy/environment-setup.md`](docs/deploy/environment-setup.md) |
 | 四机整合与切层计划 | [`docs/deploy/four-laptop-integration-plan.md`](docs/deploy/four-laptop-integration-plan.md) |
 | 实测数据与能力边界 | [`docs/deploy/edge-4gpu-deployment-analysis.md`](docs/deploy/edge-4gpu-deployment-analysis.md) |
 | 推理优化路径全景 | [`docs/research/inference-optimization-landscape.md`](docs/research/inference-optimization-landscape.md) |

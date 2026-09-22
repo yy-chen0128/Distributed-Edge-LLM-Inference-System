@@ -208,6 +208,12 @@ decode  单段耗时 ≈  0 ms(固定) +  5.1 ms × 层数        （末段再 +
 | 2 | 2447 ms | 16 | **6.54 tok/s**（1.29×） | 2379 ms |
 | 4 | 4091 ms | 32 | **7.82 tok/s**（1.55×） | 3975 ms |
 
+> **口径（重要）**：这组数据出自 `real_pipeline_conc.json`，其中 `device_kind = cpu`、`dtype = torch.float32`——
+> 是**纯 CPU 运行**，不是 GPU。GPU 路径（`wsl_gpu_pipeline.json`）目前**只有单请求**数据，没有 K 扫描。
+> 另外那次 GPU 运行里四个 agent 的 `device` **全是 `cuda:0`**（共用一块 8GB 卡），
+> 所以"四段流水线"在单机上不等于四台机器。结论解读与单机边界见
+> [`../design/single-machine-scope-and-batching.md`](../design/single-machine-scope-and-batching.md) §2.3–2.4。
+
 - **吞吐确实随并发上升**：单请求时流水线里只有 1 段在工作（其余 3 段空转，即经典的
   PP 气泡）；多请求交叠后 4 段被填满。
 - 但**远没到 4× 上限**，原因清楚且已由数据证明：4 个 agent 挤在一台 24 核 CPU 上争抢

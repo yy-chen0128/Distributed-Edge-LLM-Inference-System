@@ -572,7 +572,7 @@ vLLM 支持"**一个实例只持有部分层 + 部分专家**"，也支持"**KV 
 **→ 因此正确的用法是：绕开 `store_layer`/`retrieve_layer`/`lookup`/`move` 这套上层 API，
 自己构造 `LayerCacheEngineKey`，直接调用 `storage_manager` 的 key 级、层无关原语**
 （`batched_allocate` / `batched_put` / `batched_get` / `batched_contains` / `batched_remove` / `pin`）。
-层区间 = 你自己挑选的 key 子集；`metadata.kv_shape[0]` 报**本 stage 的层数**，
+层区间 = 自选的 key 子集；`metadata.kv_shape[0]` 报**本 stage 的层数**，
 本地按段索引，`split_layers` 就自然只覆盖本段。
 
 **⑥ 自定义存储后端怎么做（无 entry point，是 config 驱动的 importlib 动态导入）**：
