@@ -1,20 +1,28 @@
-# distributed-llm-scheduler — 边缘分布式 LLM 推理调度系统
+# Distributed-Edge-LLM-Inference-System — 边缘分布式 LLM 推理调度系统
 
 在边缘异构算力节点（消费级 GPU / 手机 / 边缘盒）上协作执行 LLM 推理的**管理调度层**。
+
+> **新同学从这里开始**
+> 1. [`docs/deploy/project-structure-and-build.md`](docs/deploy/project-structure-and-build.md) —— 项目由什么构成、怎么跑、改动落在哪一层
+> 2. [`docs/deploy/environment-setup.md`](docs/deploy/environment-setup.md) —— 在自己笔记本上把环境配起来（Windows + WSL2 / Ubuntu）
+> 3. [`docs/deploy/four-laptop-integration-plan.md`](docs/deploy/four-laptop-integration-plan.md) —— 四机怎么整合、切层怎么定、分阶段计划
 
 ## 项目结构
 
 ```
-distributed-llm-scheduler/
+Distributed-Edge-LLM-Inference-System/
 ├── edge_llm_scheduler/        # 核心框架（自研调度层）
-│   ├── core/                  # 机制层：类型/存储/传输/事件/节点/模型装载/任务调度
+│   ├── core/                  # 机制层：类型/存储/传输/事件/节点/模型账本/任务调度/epoch 重配置
 │   ├── policies/              # 策略层：放置/迁移/重并行化/中断恢复（可插拔）
-│   ├── backends/              # 对接：mock / LMCache / vLLM / TCP / WiFi
-│   ├── experiments/           # 模拟实验
-│   └── tests/                 # 测试（64+ 通过）
-├── LMCache/                   # KV 缓存存储与传输（官方 clone，纯 CPU 可测）
-├── vllm/                      # LLM 推理引擎（官方 clone）
-├── docs/                      # 调研文档与项目规划（见 docs/README.md）
+│   ├── backends/              # 执行与存储：真实 HF 分层运行时 / toy / mock / TCP / LMCache / vLLM 客户端
+│   ├── agents/                # 节点 agent：一个进程承载一段层（TCP 控制面 + activation 数据面）
+│   ├── experiments/           # 实验入口：真实跨机流水线 / 数值一致性 / 链路测量 / 分层模拟
+│   ├── deploy/                # 四机部署配置与启动脚本（cluster.example.json / start_agent.*）
+│   └── tests/                 # 测试（86+ passed；skip 为可选集成未装，skip≠pass）
+├── scripts/                   # 环境与工具脚本（collect_env / model_pp_fit / hf_mirror_download / WSL 自检）
+├── docs/                      # 文档：research 调研 · plan 计划 · deploy 部署与实测（见 docs/README.md）
+├── vllm/  LMCache/            # 第三方源码快照，仅供阅读与复用评估（上游与版本见 docs/deploy/project-structure-and-build.md）
+├── moe-infinity/ preble/ spotserve/   # 参考实现 clone（已在 .gitignore 中排除）
 └── README.md
 ```
 
@@ -49,27 +57,44 @@ E2 缓存感知路由命中率提升 0.64，负载更均衡。
 
 ## 快速开始
 
+> 完整环境配置（WSL2、GPU、依赖、模型下载、链路测量）见
+> [`docs/deploy/environment-setup.md`](docs/deploy/environment-setup.md)。
+
 ```bash
-# 依赖（torch CPU 版即可）
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# ① 控制面（不需要 GPU）
+PYTHONPATH=. python -m pytest edge_llm_scheduler/tests/ -q      # 86+ passed
+PYTHONPATH=. python -m edge_llm_scheduler.cli --nodes 3 --requests 3
 
-# 跑测试
-cd edge_llm_scheduler
-python -m pytest tests/ -q          # 64 passed
+# ② 真实分层推理（需要 torch 与本地模型；device 可换 cpu）
+python -m edge_llm_scheduler.experiments.verify_equivalence \
+  --model .models/Qwen2.5-0.5B-Instruct --stages 4 --max-tokens 8
+python -m edge_llm_scheduler.experiments.run_real_pipeline --local 4 \
+  --device cuda:0 --model .models/Qwen2.5-0.5B-Instruct --max-tokens 8
 
-# 模拟实验（对比策略命中率）
-python -m edge_llm_scheduler.experiments.run_simulation
+# ③ 四机分布式：每台起 agent，控制端给 cluster.json
+python -m edge_llm_scheduler.agents.stage_agent --node-id alpha --port 9100 \
+  --host 0.0.0.0 --model .models/Qwen2.5-0.5B-Instruct --device cuda:0
+python -m edge_llm_scheduler.experiments.run_real_pipeline \
+  --cluster edge_llm_scheduler/deploy/cluster.example.json --max-tokens 16
 ```
 
 ### LMCache 真实对接（无需 GPU）
 ```bash
-# 真实 LMCache CPU 存储后端验证
-python -m pytest tests/test_lmcache_real.py -v   # 2 passed
+python -m pytest edge_llm_scheduler/tests/test_lmcache_real.py -v   # 未装 lmcache 时 skip
 ```
 
 ## 文档与后续方向
 
-详细设计见 `research/plan/review/`（framework-design.md、simulation-feasibility.md 等）。
+文档已按主题整理到 `docs/`，索引见 [`docs/README.md`](docs/README.md)：
+
+| 想知道什么 | 看哪份 |
+|---|---|
+| 项目结构与构建方式 | [`docs/deploy/project-structure-and-build.md`](docs/deploy/project-structure-and-build.md) |
+| 怎么配环境（给同学） | [`docs/deploy/environment-setup.md`](docs/deploy/environment-setup.md) |
+| 四机整合与切层计划 | [`docs/deploy/four-laptop-integration-plan.md`](docs/deploy/four-laptop-integration-plan.md) |
+| 实测数据与能力边界 | [`docs/deploy/edge-4gpu-deployment-analysis.md`](docs/deploy/edge-4gpu-deployment-analysis.md) |
+| 推理优化路径全景 | [`docs/research/inference-optimization-landscape.md`](docs/research/inference-optimization-landscape.md) |
+| 当前进度与路线图 | [`docs/plan/current-work-and-roadmap.md`](docs/plan/current-work-and-roadmap.md) |
 
 ### 后续方向（论文推进）
 
