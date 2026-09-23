@@ -116,8 +116,13 @@ def main() -> int:
     if len(results) >= 2 and results[0][0] > 0:
         speedup = results[0][0] / max(1e-9, min(r[0] for r in results[1:]))
         print(f"[{args.label}] first-request TTFT / best-warm TTFT = {speedup:.1f}x")
-    print(f"[{args.label}] JSON {json.dumps({'ttft_ms': [round(r[0], 1) for r in results],"
-          f"'prompt_tokens': results[0][3]})}")
+    summary = {
+        "label": args.label,
+        "ttft_ms": [round(r[0], 1) for r in results],
+        "total_ms": [round(r[1], 1) for r in results],
+        "prompt_tokens": results[0][3],
+    }
+    print(f"[{args.label}] JSON {json.dumps(summary)}")
     return 0
 
 
