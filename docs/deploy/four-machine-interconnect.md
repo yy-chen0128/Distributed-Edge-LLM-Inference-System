@@ -11,7 +11,26 @@
 
 ## ① 需要你提供什么
 
-### 1.1 填这张表（每台一行）
+> ### ⚡ 最快的路径：在每台机器上跑一个自检脚本
+>
+> 不用手填表——**在每台机器的 WSL 里跑**（先 `cd` 到仓库目录）：
+>
+> ```bash
+> python scripts/check_node_readiness.py --peer <head的IP> \
+>        --json-out node_readiness_$(hostname).json
+> ```
+>
+> 它会把下面 1.1 表里需要的**全部字段**（GPU/显存/驱动版本/CUDA 版本/compute cap/WSL 网络模式/
+> venv 里的 torch·vllm·ray·lmcache 版本/磁盘/端口/到 head 的连通性）+ **异构判定**一次采齐，
+> 打印一段 `### SEND THESE BACK TO THE CONTROLLER ###`，并把 JSON 写到文件里。
+> **把那段输出（或那个 JSON）发我即可。**
+>
+> 我这边用 `scripts/fleet_plan_from_readiness.py node_readiness_*.json` 汇总，
+> 它会给出：**全集群该装哪套版本**（由驱动 CUDA 最低的那台决定）、
+> **该用哪个模型档**（由显存最小的那台决定）、**vLLM 均分下每台拿几层能不能装下**、
+> 以及**哪几台有硬阻塞**（例如没开 mirrored 网络 → 别人连不进来）。
+
+### 1.1 填这张表（自检脚本已经覆盖，手工填也行）
 
 | 字段 | 例 | 机器 A | 机器 B | 机器 C | 机器 D |
 |---|---|---|---|---|---|
@@ -322,8 +341,13 @@ python -m edge_llm_scheduler.gateway.vllm_gateway \
 
 ## ⑧ 交接清单（我这边要收到什么才能开工）
 
-1. §1.1 的**四行表格**（含每台 LAN IP 与显存）；
+**最快路径**：每台跑一次 `scripts/check_node_readiness.py`（见 §1），把那段
+`### SEND THESE BACK TO THE CONTROLLER ###` 或 `node_readiness_<host>.json` 发我。
+
+若自检脚本跑不起来（例如还没配 Python 环境），退化成手工提供：
+
+1. §1.1 的**四行表格**（含每台 LAN IP、**显存**与**驱动 CUDA 版本**）；
 2. §1.2 的**三条确认**（互 ping / 端口 / mirrored）；
-3. 每台的 `collect_env.py` 输出；
+3. 每台的 `collect_env.py` 输出（自研引擎路线用的那份，可选）；
 4. §2.2 的**两两链路 JSON**（至少 head 与其余三台之间）；
 5. 每台是否允许我 ssh（否则我给你一键脚本，你逐台粘贴）。
