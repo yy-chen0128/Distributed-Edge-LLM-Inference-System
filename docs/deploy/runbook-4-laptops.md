@@ -1,5 +1,17 @@
 # 四台笔记本端侧部署运行手册（真实分层流水线推理）
 
+> ⚠️ **这份手册服务于「自研分层引擎」路线，不是当前主线。**
+> 2026-09-22 起执行面已改为 **vLLM + LMCache**：
+>
+> | 你要做的事 | 读哪份 |
+> |---|---|
+> | **每台机器配环境**（系统/WSL/GPU/Python/模型） | [`environment-setup.md`](environment-setup.md)（§0–3 共用；**vLLM 路线看 §2.6**） |
+> | **把四台连起来、启动、验收、演练节点脱离**（当前主线） | [`four-machine-interconnect.md`](four-machine-interconnect.md) |
+> | **用自研引擎跑分层流水线**（本文件） | 继续往下读 |
+>
+> 为什么换主线、vLLM 路线有什么硬约束，见 [`vllm-lmcache-4node-plan.md`](vllm-lmcache-4node-plan.md)；
+> 自研引擎的结论保留作对照，见 `docs/research/` 与 [`edge-4gpu-deployment-analysis.md`](edge-4gpu-deployment-analysis.md)。
+>
 > 适用：4 张消费级笔记本 GPU（显存 4–8GB 级别）组成的异构小集群。
 > 目标：把**一个模型按层切成 4 段**分别放到 4 台机器上，通过真实网络传递
 > activation，跨机跑完一次完整推理，并能在**某台机器中途离开**后重新切层继续服务。

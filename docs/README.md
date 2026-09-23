@@ -25,14 +25,30 @@ docs/
 
 ## deploy/ — 部署、环境与实测
 
+> ### 入口：你想做什么 → 读哪一份
+>
+> | 我要做的事 | 读这份 | 路线 |
+> |---|---|---|
+> | **在一台新机器上把环境配起来** | [`environment-setup.md`](deploy/environment-setup.md) —— **唯一一份**；§0–§3 两条路线共用，**vLLM 路线看 §2.6** | 共用 |
+> | **把四台机器连起来 / 启动 / 验收 / 演练节点脱离** | [`four-machine-interconnect.md`](deploy/four-machine-interconnect.md) | **vLLM（当前主线）** |
+> | 看 vLLM 路线的方案、硬约束、档0+档1 | [`vllm-lmcache-4node-plan.md`](deploy/vllm-lmcache-4node-plan.md) | **vLLM（当前主线）** |
+> | 用**自研分层引擎**跑跨机流水线（起 agent / 控制面） | [`runbook-4-laptops.md`](deploy/runbook-4-laptops.md) | 自研引擎（对照/备用） |
+> | 看实测数据与能力边界（PP/TP/KV/并发） | [`edge-4gpu-deployment-analysis.md`](deploy/edge-4gpu-deployment-analysis.md) | 自研引擎 |
+> | 看四机整合的整体计划与分阶段安排 | [`four-laptop-integration-plan.md`](deploy/four-laptop-integration-plan.md) | 两者 |
+> | 看代码由什么构成、改动落在哪一层 | [`project-structure-and-build.md`](deploy/project-structure-and-build.md) | 两者 |
+>
+> ⚠️ **配环境只有 `environment-setup.md` 一份，不要另起新文档**——新增内容请补进它对应的节，
+> 否则同学会读到过期的那份（2026-09-23 就因为"怎么跑"散在两份、而自研那份没标主线，差点误导）。
+
 | 文档 | 内容 |
 |---|---|
-| **environment-setup.md** | **环境配置文档**：WSL2/Ubuntu 选型、GPU 与 venv、依赖、模型下载、起节点 agent、链路测量、常见坑、一页速查 |
+| **environment-setup.md** ★ | **环境配置的唯一入口**：顶部有"两条路线读哪几节"的范围声明；§0–§3 系统/WSL/GPU/venv/模型共用；**§2.6 是 vLLM + LMCache 路线的环境**（独立 venv、pip 源坑、缓存位置、验收、体积、模型档位表）；§4–§6 是自研引擎路线的自检与交接 |
+| **four-machine-interconnect.md** ★ | **四机互联手册**（vLLM 主线）：需要你提供什么（四行表格 + 三条权限确认 + 链路实测 JSON + **每台驱动版本**）、**异构分三种及驱动/CUDA 的决策规则**、网络可行性（PP 只需 0.9–3.4 Mbit/s，**瓶颈是延迟不是带宽**）、WSL mirrored 模式的坑与 NCCL 网卡指定、端口清单、启动顺序、8 条验收清单（含"TPOT 跨机代价"这个成败判据）、节点脱离演练、故障排查 |
+| **vllm-lmcache-4node-plan.md** ★ | **vLLM + LMCache 四机推理方案**（当前主线）：**五条硬约束**（含实测的驱动/CUDA 版本约束）、部署架构、V1–V4 + 12 项验证清单（标了单机/必须真机）、档0+档1（气泡重启 + 拼接提示词重放）流程与网关实现位置 |
+| **runbook-4-laptops.md** | **自研分层引擎路线的运行手册**（顶部已标"非当前主线"）：起 agent、控制面、单机验证、采集清单 |
 | **project-structure-and-build.md** | **项目结构与构建说明**：三层架构、两条执行轨道、目录职责、关键数据契约、四种运行方式、外部参考实现来源、仓库约定与文档地图 |
 | **four-laptop-integration-plan.md** | 四台笔记本整合计划：OS 决策、GPU 环境、模型选型（含"平均切失败/加权切成功"算例）、优化构件与复用情况、P0–P5 分阶段计划、风险清单 |
 | **edge-4gpu-deployment-analysis.md** | 真实部署实测分析：四段流水线数值正确性、分片足迹、成本模型、节点离开重配置、并发吞吐、异构切层、PP/TP 定量对比、实验方案 |
-| **vllm-lmcache-4node-plan.md** | **vLLM + LMCache 四机推理方案与执行手册**（当前主线）：四条硬约束（PP 启动期定死／官方要求节点环境一致／不按显存加权切分→靠量化适配／仅 Linux）、部署架构（Ray + PP=4 + LMCache connector）、V1–V4 验收标准、档0+档1（气泡重启 + 拼接提示词重放）可执行流程与网关实现位置、未决问题与执行顺序 |
-| **four-machine-interconnect.md** | **四机互联手册**：需要你提供什么（四行表格 + 三条权限确认 + 链路实测 JSON）、网络可行性（PP 只需 0.9–3.4 Mbit/s，**瓶颈是延迟不是带宽**）、WSL mirrored 模式的坑与 NCCL 网卡指定、每台要装的差异、端口清单、启动顺序、8 条验收清单（含"TPOT 跨机代价"这个成败判据）、节点脱离演练、故障排查 |
 
 ## design/ — 设计讨论
 
