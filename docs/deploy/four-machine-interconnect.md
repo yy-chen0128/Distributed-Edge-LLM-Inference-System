@@ -311,6 +311,7 @@ python -m edge_llm_scheduler.gateway.vllm_gateway \
 | `ray status` 只看到 1 台 | worker 连不上 head：防火墙 / 不同子网 / 校园网隔离 | §1.2 的三条确认；先 `telnet <head> 6379` 试 |
 | worker 连上又掉 | Ray worker 端口段被拦 | 收窄 `--min-worker-port/--max-worker-port` 并放行 |
 | vLLM 起不来 / 卡在初始化 | NCCL 挑错网卡 | §3.4 的 `NCCL_SOCKET_IFNAME`/`GLOO_SOCKET_IFNAME` + `VLLM_HOST_IP` |
+| **日志出现 `[c10d] The hostname of the client socket cannot be retrieved. err=-3`** | **mirrored 网络下 WSL 解析不了自己的主机名**；vLLM 的分布式初始化走 c10d/TCPStore，单机只是警告，**多机可能直接卡住或选错地址**（本机单机跑时已实测出现） | 显式指定 `MASTER_ADDR=<head 的 LAN IP>`、`VLLM_HOST_IP=<本机 LAN IP>`；必要时在 `/etc/hosts` 里手工加主机名映射 |
 | **4GB 那台 OOM** | 7B fp16 均分 7 层 = 3.26GB | 换 **AWQ int4**；或把 PP 改成 2 并把小机器排除 |
 | 请求很慢、每 token 几百 ms | 网络延迟主导 | 用 §2.2 的实测数字定位；考虑减段数、或改"多 token 流水" |
 | WSL 里服务别的机器连不上 | 那台还是 NAT 模式 | §2.3：开 `networkingMode=mirrored` |
