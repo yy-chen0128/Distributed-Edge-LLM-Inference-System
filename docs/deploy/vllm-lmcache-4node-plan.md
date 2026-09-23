@@ -115,12 +115,21 @@
 
 ### 5.2 入口网关要实现的四件事（档0+档1 的实现全在这里）
 
-| 职责 | 说明 |
-|---|---|
-| **累积** | 边转发边记录：`原 prompt` + `已生成的内容`（这是重放的原料；也顺便解决了 progress 读数问题） |
-| **判故障** | 下游连接错误 / 超时 / vLLM 进程消失 → 置"流水线不可用" |
-| **停接纳 + drain** | 新请求 503 或排队；在途请求给 grace 窗口 |
-| **重放** | 重建完成后重新提交拼接后的 prompt，**只转发新增部分**，并把这次重放记进指标 |
+**已实现**：`edge_llm_scheduler/gateway/vllm_gateway.py`（纯逻辑单测见
+`edge_llm_scheduler/tests/test_gateway_replay.py`，9 个用例）。
+启动：`python -m edge_llm_scheduler.gateway.vllm_gateway --upstream http://127.0.0.1:8000 --port 8100`
+（需要 `fastapi/uvicorn/httpx`，已装进 `~/venvs/pair`）。
+
+| 职责 | 说明 | 实现位置 |
+|---|---|---|
+| **累积** | 边转发边记录：`原 prompt` + `已生成的内容`（重放的原料；也顺便解决了 progress 读数问题） | `_stream_with_recovery` 里的 `sent` |
+| **判故障** | 下游连接错误 / 流中断 / HTTP >= 400 → 置"流水线不可用" | 异常捕获 + `state.mark_down` |
+| **停接纳 + drain** | 新请求 503；在途请求进入重放流程 | `/admin/drain`、`/admin/resume`、`GET /admin/status` |
+| **重放** | 用 `[原 prompt + 已生成内容]` 重新提交，**只转发新增部分**，客户端那条 SSE 流不断 | `build_replay_body` + `skip_already_sent` |
+
+**额外做的一件事——把"分词器不保证恒等"变成指标**：重放输出与"已发送内容"做前缀比对，
+不一致就计数 `replay_diverged`（`GET /admin/status` 可见）。
+这样 §5.3 里那个坑不再只是口头风险，而是**每次实验都能看到的保真度数字**。
 
 ### 5.3 一个必须先查清的技术点：重放用**文本**还是**token id**
 
