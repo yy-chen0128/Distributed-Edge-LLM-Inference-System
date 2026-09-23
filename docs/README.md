@@ -31,6 +31,7 @@ docs/
 | **project-structure-and-build.md** | **项目结构与构建说明**：三层架构、两条执行轨道、目录职责、关键数据契约、四种运行方式、外部参考实现来源、仓库约定与文档地图 |
 | **four-laptop-integration-plan.md** | 四台笔记本整合计划：OS 决策、GPU 环境、模型选型（含"平均切失败/加权切成功"算例）、优化构件与复用情况、P0–P5 分阶段计划、风险清单 |
 | **edge-4gpu-deployment-analysis.md** | 真实部署实测分析：四段流水线数值正确性、分片足迹、成本模型、节点离开重配置、并发吞吐、异构切层、PP/TP 定量对比、实验方案 |
+| **vllm-lmcache-4node-plan.md** | **vLLM + LMCache 四机推理方案与执行手册**（当前主线）：四条硬约束（PP 启动期定死／官方要求节点环境一致／不按显存加权切分→靠量化适配／仅 Linux）、部署架构（Ray + PP=4 + LMCache connector）、V1–V4 验收标准、档0「气泡重启」可执行流程、未决问题与执行顺序 |
 
 ## design/ — 设计讨论
 
