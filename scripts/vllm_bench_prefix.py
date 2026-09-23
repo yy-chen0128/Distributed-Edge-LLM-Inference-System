@@ -20,23 +20,27 @@ import urllib.request
 
 
 def build_prefix(prefix_tokens: int) -> str:
-    """A deterministic filler text of roughly `prefix_tokens` tokens.
+    """Approximate a target token count.
 
-    Qwen's tokenizer turns each 'word ' into ~1 token, so we count words.
+    IMPORTANT: keep the word roughly 1:1 with tokens. An earlier version used
+    'ctx00000'-style words, which tokenise into several tokens each, so a
+    "3000-token" prefix was really >8192 tokens and the server correctly answered
+    HTTP 400. ' the' is ~1 token per repeat for Qwen-class tokenizers, and the
+    real count is reported back from the response usage.
     """
-    words = [f"ctx{i:05d}" for i in range(prefix_tokens)]
-    return " ".join(words)
+    return "".join(" the" for _ in range(prefix_tokens))
 
 
 def stream_completion(base_url: str, model: str, prompt: str, max_tokens: int,
-                      timeout: float) -> tuple[float, float, int]:
-    """Return (ttft_ms, total_ms, completion_tokens) using SSE streaming."""
+                      timeout: float) -> tuple[float, float, int, int]:
+    """Return (ttft_ms, total_ms, completion_chars, prompt_tokens)."""
     body = json.dumps({
         "model": model,
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }).encode("utf-8")
     req = urllib.request.Request(
         f"{base_url}/v1/completions", data=body,
@@ -44,27 +48,36 @@ def stream_completion(base_url: str, model: str, prompt: str, max_tokens: int,
     started = time.perf_counter()
     ttft = None
     text_len = 0
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        for raw in resp:
-            line = raw.decode("utf-8", "replace").strip()
-            if not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if payload == "[DONE]":
-                break
-            try:
-                chunk = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            choices = chunk.get("choices") or []
-            if not choices:
-                continue
-            text = choices[0].get("text") or ""
-            if text and ttft is None:
-                ttft = (time.perf_counter() - started) * 1000.0
-            text_len += len(text)
+    prompt_tokens = 0
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                usage = chunk.get("usage") or {}
+                if usage.get("prompt_tokens"):
+                    prompt_tokens = int(usage["prompt_tokens"])
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                text = choices[0].get("text") or ""
+                if text and ttft is None:
+                    ttft = (time.perf_counter() - started) * 1000.0
+                text_len += len(text)
+    except urllib.error.HTTPError as exc:
+        # print the server's explanation instead of just "HTTP Error 400"
+        detail = exc.read().decode("utf-8", "replace")[:600]
+        raise SystemExit(f"HTTP {exc.code} from {base_url}/v1/completions:\n{detail}")
     total = (time.perf_counter() - started) * 1000.0
-    return (ttft if ttft is not None else total), total, text_len
+    return (ttft if ttft is not None else total), total, text_len, prompt_tokens
 
 
 def main() -> int:
@@ -86,22 +99,25 @@ def main() -> int:
     prefix = build_prefix(args.prefix_tokens)
     print(f"[{args.label}] model={model} shared-prefix words={args.prefix_tokens} "
           f"requests={args.requests}")
-    print(f"[{args.label}] {'#':>2} {'TTFT ms':>10} {'total ms':>10} {'chars':>7}  note")
+    print(f"[{args.label}] {'#':>2} {'TTFT ms':>10} {'total ms':>10} {'chars':>7} "
+          f"{'prompt_tok':>10}  note")
 
     results = []
     for i in range(args.requests):
         # same long prefix, a different short suffix each time
         prompt = f"{prefix}\nQuestion {i}: reply with one short sentence."
-        ttft, total, chars = stream_completion(
+        ttft, total, chars, ptok = stream_completion(
             args.base_url, model, prompt, args.max_tokens, args.timeout)
         note = "cold (first)" if i == 0 else ("warm (prefix cached)" if i == 1 else "")
-        results.append((ttft, total, chars))
-        print(f"[{args.label}] {i:>2} {ttft:>10.1f} {total:>10.1f} {chars:>7}  {note}")
+        results.append((ttft, total, chars, ptok))
+        print(f"[{args.label}] {i:>2} {ttft:>10.1f} {total:>10.1f} {chars:>7} "
+              f"{ptok:>10}  {note}")
 
     if len(results) >= 2 and results[0][0] > 0:
         speedup = results[0][0] / max(1e-9, min(r[0] for r in results[1:]))
         print(f"[{args.label}] first-request TTFT / best-warm TTFT = {speedup:.1f}x")
-    print(f"[{args.label}] JSON {json.dumps([round(r[0], 1) for r in results])}")
+    print(f"[{args.label}] JSON {json.dumps({'ttft_ms': [round(r[0], 1) for r in results],"
+          f"'prompt_tokens': results[0][3]})}")
     return 0
 
 

@@ -31,6 +31,44 @@
 
 **待决策**：升驱动（≥580）还是降版本（cu124/cu126 的老组合）。**在这一条定下来之前不装。**
 
+### 0.2 已跑通的版本组合（2026-09-23 实测，降级方案）
+
+**决定：不升驱动，用老组合。** 实测唯一可用的一套（本机 566.24 / CUDA 12.7）：
+
+| 组件 | 版本 | 备注 |
+|---|---|---|
+| **vLLM** | **0.10.1** | torch 钉 2.7.1（cu126）。**0.10.2 就跳到 torch 2.8（cu128）→ 需要驱动 ≥12.8，不行** |
+| **torch** | **2.7.1+cu126** | `cuda available: True`，GPU matmul 正常 |
+| **transformers** | **必须 <5（实测 4.55.4）** | ⚠️ vLLM 0.10.1 的依赖写的是 `transformers>=4.53.2`，pip 会装 **5.x**，然后服务起不来：<br>`AttributeError: Qwen2Tokenizer has no attribute all_special_tokens_extended`。**必须显式钉 `<5`** |
+| **LMCache** | **0.3.5** | ⚠️ **0.3.6 及以上的 wheel 与 torch 2.7.1 有 ABI 冲突**：<br>`lmcache/c_ops...so: undefined symbol: _ZN3c104cuda9SetDeviceEab`（= `c10::cuda::SetDevice`）。0.3.5/0.3.3 的 `c_ops` 正常，且 `lmcache.integration.vllm.lmcache_connector_v1` 可导入 |
+| ray | 2.58.0 | vLLM 0.10.1 要求 `ray[cgraph]>=2.48.0`（PP 要用 Ray Compiled Graph） |
+| 其他 | tokenizers<0.22 | 跟 transformers 4.x 配套 |
+
+**装法（顺序重要）**：
+
+```bash
+export PIP_CACHE_DIR=/mnt/d/pipcache
+IDX=https://pypi.tuna.tsinghua.edu.cn/simple
+python3 -m venv --clear ~/venvs/vllm
+~/venvs/vllm/bin/pip install -i $IDX "vllm==0.10.1"                 # 它自己钉 torch 2.7.1
+~/venvs/vllm/bin/pip install -i $IDX "transformers>=4.53.2,<5" "tokenizers<0.22"   # 必须！
+~/venvs/vllm/bin/pip install -i $IDX "torch==2.7.1" "lmcache==0.3.5"               # 钉 torch 防被拉高
+```
+
+**本机实测的启动开销（档0 气泡的第一项）**：
+
+| 阶段 | 耗时 |
+|---|---|
+| `vllm serve` → ready（0.5B 模型，8GB 卡） | **85–105 s** |
+| 其中 engine init（profile + 建 KV cache + warmup） | **34.5 s** |
+| 其中 CUDA graph capture | 3 s |
+| 可用 KV 显存（`gpu-memory-utilization 0.55`） | 2.07 GiB |
+
+> ⚠️ **踩坑记录（对实验口径有影响）**：我原来的压测客户端用 `ctx00000` 这类词造"3000 token 前缀"，
+> 但**这类词每个会被切成好几个 token**，实际 prompt 远超 `max-model-len 8192`，
+> 服务端返回 **HTTP 400**。现在改成 `" the"` 重复（接近 1 token/词）并**从响应 usage 里读真实 `prompt_tokens`**。
+> 教训：**任何"长度"实验都必须报告 tokenizer 实测的 token 数**，不能按词数估。
+
 > **一句话**：vLLM 路线把"异构"这件事从"切分策略"挪到了"选哪个量化模型"上。
 > 好处是**今天就能跑**（量化权重是现成的）；代价是**放弃了"按设备能力加权切层"这个卖点**（那是自研引擎的贡献）。
 > 这不是矛盾——两条路线本来就是"能跑起来"与"能发表"的分工。
