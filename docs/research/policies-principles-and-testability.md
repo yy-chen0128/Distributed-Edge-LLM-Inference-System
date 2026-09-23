@@ -436,7 +436,7 @@ Windows 侧一键（走工作区密钥 + ssh）：
 $script = Get-Content project\scripts\wsl_run_policy_sim.sh -Raw
 $script | & "$env:SystemRoot\System32\OpenSSH\ssh.exe" `
   -i project\.ssh\agent_ed25519 -o UserKnownHostsFile=project\.ssh\known_hosts `
-  -o BatchMode=yes -p 22 yychen@127.0.0.1 "tr -d '\r' | bash -s"
+  -o BatchMode=yes -p 22 <wsl-user>@127.0.0.1 "tr -d '\r' | bash -s"
 ```
 
 ---

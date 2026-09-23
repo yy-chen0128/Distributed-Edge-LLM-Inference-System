@@ -32,16 +32,21 @@ def build_prefix(prefix_tokens: int) -> str:
 
 
 def stream_completion(base_url: str, model: str, prompt: str, max_tokens: int,
-                      timeout: float) -> tuple[float, float, int, int]:
-    """Return (ttft_ms, total_ms, completion_chars, prompt_tokens)."""
-    body = json.dumps({
+                      timeout: float, ignore_eos: bool = False
+                      ) -> tuple[float, float, int, int, int]:
+    """Return (ttft_ms, total_ms, completion_chars, prompt_tokens, completion_tokens)."""
+    body_dict = {
         "model": model,
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
         "stream_options": {"include_usage": True},
-    }).encode("utf-8")
+    }
+    if ignore_eos:
+        # force the full token count so per-token timings are comparable across runs
+        body_dict["ignore_eos"] = True
+    body = json.dumps(body_dict).encode("utf-8")
     req = urllib.request.Request(
         f"{base_url}/v1/completions", data=body,
         headers={"Content-Type": "application/json"})
@@ -49,6 +54,7 @@ def stream_completion(base_url: str, model: str, prompt: str, max_tokens: int,
     ttft = None
     text_len = 0
     prompt_tokens = 0
+    completion_tokens = 0
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             for raw in resp:
@@ -65,6 +71,8 @@ def stream_completion(base_url: str, model: str, prompt: str, max_tokens: int,
                 usage = chunk.get("usage") or {}
                 if usage.get("prompt_tokens"):
                     prompt_tokens = int(usage["prompt_tokens"])
+                if usage.get("completion_tokens"):
+                    completion_tokens = int(usage["completion_tokens"])
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue
@@ -77,7 +85,10 @@ def stream_completion(base_url: str, model: str, prompt: str, max_tokens: int,
         detail = exc.read().decode("utf-8", "replace")[:600]
         raise SystemExit(f"HTTP {exc.code} from {base_url}/v1/completions:\n{detail}")
     total = (time.perf_counter() - started) * 1000.0
-    return (ttft if ttft is not None else total), total, text_len, prompt_tokens
+    if not completion_tokens:
+        completion_tokens = text_len  # rough fallback
+    return ((ttft if ttft is not None else total), total, text_len,
+            prompt_tokens, completion_tokens)
 
 
 def main() -> int:
@@ -89,6 +100,8 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=16)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--label", default="run")
+    parser.add_argument("--ignore-eos", action="store_true",
+                        help="force the full token count (comparable timings across runs)")
     args = parser.parse_args()
 
     model = args.model
@@ -98,30 +111,32 @@ def main() -> int:
 
     prefix = build_prefix(args.prefix_tokens)
     print(f"[{args.label}] model={model} shared-prefix words={args.prefix_tokens} "
-          f"requests={args.requests}")
+          f"requests={args.requests} max_tokens={args.max_tokens} "
+          f"ignore_eos={args.ignore_eos}")
     print(f"[{args.label}] {'#':>2} {'TTFT ms':>10} {'total ms':>10} {'chars':>7} "
-          f"{'prompt_tok':>10}  note")
+          f"{'ptok':>6} {'ctok':>5} {'tok/s':>8} {'TPOT ms':>8}  note")
 
     results = []
     for i in range(args.requests):
         # same long prefix, a different short suffix each time
         prompt = f"{prefix}\nQuestion {i}: reply with one short sentence."
-        ttft, total, chars, ptok = stream_completion(
-            args.base_url, model, prompt, args.max_tokens, args.timeout)
+        ttft, total, chars, ptok, ctok = stream_completion(
+            args.base_url, model, prompt, args.max_tokens, args.timeout, args.ignore_eos)
+        # TPOT = time per OUTPUT token after the first (standard decode metric)
+        tpot = (total - ttft) / max(1, ctok - 1)
+        tps = ctok / max(1e-9, total / 1000.0)
         note = "cold (first)" if i == 0 else ("warm (prefix cached)" if i == 1 else "")
-        results.append((ttft, total, chars, ptok))
+        results.append({"ttft": ttft, "total": total, "chars": chars, "ptok": ptok,
+                        "ctok": ctok, "tpot": tpot, "tps": tps})
         print(f"[{args.label}] {i:>2} {ttft:>10.1f} {total:>10.1f} {chars:>7} "
-              f"{ptok:>10}  {note}")
+              f"{ptok:>6} {ctok:>5} {tps:>8.1f} {tpot:>8.2f}  {note}")
 
-    if len(results) >= 2 and results[0][0] > 0:
-        speedup = results[0][0] / max(1e-9, min(r[0] for r in results[1:]))
-        print(f"[{args.label}] first-request TTFT / best-warm TTFT = {speedup:.1f}x")
-    summary = {
-        "label": args.label,
-        "ttft_ms": [round(r[0], 1) for r in results],
-        "total_ms": [round(r[1], 1) for r in results],
-        "prompt_tokens": results[0][3],
-    }
+    summary = {"label": args.label, "prompt_tokens": results[0]["ptok"],
+               "completion_tokens": results[-1]["ctok"],
+               "ttft_ms": [round(r["ttft"], 1) for r in results],
+               "tpot_ms": [round(r["tpot"], 2) for r in results],
+               "tps": [round(r["tps"], 1) for r in results],
+               "warm_tpot_ms": round(results[-1]["tpot"], 2)}
     print(f"[{args.label}] JSON {json.dumps(summary)}")
     return 0
 

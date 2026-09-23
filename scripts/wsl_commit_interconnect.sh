@@ -31,9 +31,9 @@ them, what do you need from me, and is the per-machine setup clear":
    and a troubleshooting table.
 
 Two machine facts measured today that the playbook depends on:
-- The WSL distro is in MIRRORED networking mode (C:\Users\12032\.wslconfig has
-  networkingMode=mirrored), and WSL's eth3 carries the same address as the Windows
-  WLAN adapter (10.20.112.129/17). Without mirrored mode a default-NAT distro is
+- The WSL distro is in MIRRORED networking mode (the Windows-side .wslconfig has
+  networkingMode=mirrored), and the WSL interface for the WLAN carries the same
+  address as the Windows WLAN adapter. Without mirrored mode a default-NAT distro is
   unreachable from the other machines, so Ray/vLLM PP could never start. Each of
   the four machines needs this.
 - The host is on a campus network (10.20.x.x/17, gateway 10.20.0.1). Campus WiFi

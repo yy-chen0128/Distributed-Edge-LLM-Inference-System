@@ -11,8 +11,8 @@
 ### 1.1 现状（实测）
 
 ```
-python  : C:\Users\12032\AppData\Local\Programs\Python\Python312\python.exe
-torch   : C:\Users\12032\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\__init__.py
+python  : C:\Users\<windows-user>\AppData\Local\Programs\Python\Python312\python.exe
+torch   : C:\Users\<windows-user>\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\__init__.py
 version : 2.13.0+cpu        ← 纯 CPU 版，cuda_available=False
 ```
 
@@ -103,11 +103,11 @@ C 盘 300GB 总 / **22.9GB 可用**（已用约 277GB）。逐项实测（**完�
 
 | 发行版 | 磁盘位置（实测） | 大小（实测） |
 |---|---|---|
-| **Ubuntu-24.04** | `C:\Users\12032\AppData\Local\wsl\{26b130cb-bad5-4ce1-a866-28bb829eecd1}\ext4.vhdx` | **69.3 GB**（其中真实数据 55GB） |
+| **Ubuntu-24.04** | `C:\Users\<windows-user>\AppData\Local\wsl\{26b130cb-bad5-4ce1-a866-28bb829eecd1}\ext4.vhdx` | **69.3 GB**（其中真实数据 55GB） |
 | Ubuntu-22.04 | `...\Packages\CanonicalGroupLimited.Ubuntu22.04LTS_79rhkp1fndgsc\LocalState\ext4.vhdx` | **4.0 GB** |
 | Ubuntu（老） | `...\Packages\CanonicalGroupLimited.UbuntuonWindows_79rhkp1fndgsc\LocalState\ext4.vhdx` | **5.3 GB** |
 | opp_env | `D:\wsl\opp_env\ext4.vhdx` | 4.1 GB（已在 D 盘） |
-| wsl-vpnkit | `C:\Users\12032\wsl-vpnkit\ext4.vhdx` | 0.1 GB |
+| wsl-vpnkit | `C:\Users\<windows-user>\wsl-vpnkit\ext4.vhdx` | 0.1 GB |
 
 五个都是 **WSL2**（注册表 `Version=2`），所以都是 `ext4.vhdx`。
 
@@ -176,7 +176,7 @@ Optimize-VHD -Path "$env:LOCALAPPDATA\wsl\{26b130cb-bad5-4ce1-a866-28bb829eecd1}
 
 # 方式 C：Hyper-V 也没有时，用 diskpart
 #   diskpart
-#   > select vdisk file="C:\Users\12032\AppData\Local\wsl\{26b130cb-...}\ext4.vhdx"
+#   > select vdisk file="C:\Users\<windows-user>\AppData\Local\wsl\{26b130cb-...}\ext4.vhdx"
 #   > attach vdisk readonly
 #   > compact vdisk
 #   > detach vdisk
