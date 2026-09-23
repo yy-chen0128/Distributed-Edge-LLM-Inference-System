@@ -174,14 +174,25 @@ def skip_already_sent(replay_text: str, already: str) -> tuple[str, bool]:
 class Gateway:
     def __init__(self, upstream: str, state: Optional[PipelineState] = None,
                  max_replays: int = 2, resume_timeout_s: float = 600.0,
-                 drain_on_error: bool = True) -> None:
+                 drain_on_error: bool = True, stall_timeout_s: float = 30.0) -> None:
         require_web_deps()
         self.upstream = upstream.rstrip("/")
         self.state = state or PipelineState()
         self.max_replays = max_replays
         self.resume_timeout_s = resume_timeout_s
         self.drain_on_error = drain_on_error
+        # 停滞检测：上游进程被杀时，SSE 连接可能既不报错也不结束（实测会永久挂住），
+        # 所以必须给"多久没收到任何字节"设一个上限，超时即当作故障 → 触发档1 恢复。
+        self.stall_timeout_s = stall_timeout_s
         self.app = self._build_app()
+
+    def _client(self, streaming: bool):
+        """按用途构造客户端：流式请求用停滞超时，非流式用普通超时。"""
+        if not streaming:
+            return httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=self.stall_timeout_s,
+                                  write=30.0, pool=10.0))
 
     # ---------------------------------------------------------------- 路由
     def _build_app(self) -> FastAPI:
@@ -306,7 +317,7 @@ class Gateway:
                 return
 
     async def _stream_once(self, endpoint: str, body: dict) -> AsyncIterator[tuple[str, bytes]]:
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with self._client(streaming=True) as client:
             async with client.stream("POST", f"{self.upstream}{endpoint}", json=body) as resp:
                 if resp.status_code >= 400:
                     detail = (await resp.aread()).decode("utf-8", "replace")[:200]
@@ -356,7 +367,7 @@ class Gateway:
         current = body
         while True:
             try:
-                async with httpx.AsyncClient(timeout=None) as client:
+                async with self._client(streaming=False) as client:
                     resp = await client.post(f"{self.upstream}{endpoint}", json=current)
                 if resp.status_code >= 400:
                     raise RuntimeError(f"upstream HTTP {resp.status_code}")
@@ -379,14 +390,18 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8100)
     parser.add_argument("--max-replays", type=int, default=2)
     parser.add_argument("--resume-timeout", type=float, default=600.0)
+    parser.add_argument("--stall-timeout", type=float, default=30.0,
+                        help="秒：多久收不到任何字节就当作上游故障（必须设，否则会被挂住）")
     args = parser.parse_args()
 
     import uvicorn
 
     require_web_deps()
     gateway = Gateway(args.upstream, max_replays=args.max_replays,
-                      resume_timeout_s=args.resume_timeout)
-    print(f"[gateway] upstream={args.upstream} listening on {args.host}:{args.port}")
+                      resume_timeout_s=args.resume_timeout,
+                      stall_timeout_s=args.stall_timeout)
+    print(f"[gateway] upstream={args.upstream} host={args.host} port={args.port} "
+          f"stall_timeout={args.stall_timeout}s")
     uvicorn.run(gateway.app, host=args.host, port=args.port, log_level="warning")
     return 0
 
