@@ -1,5 +1,16 @@
 # 环境配置文档（每台笔记本各做一遍）
 
+> **这份文档服务于两条路线，请先确认你要走哪条**（2026-09-22 起主线是 vLLM）：
+>
+> | 路线 | 要读哪几节 | 用途 |
+> |---|---|---|
+> | **vLLM + LMCache（当前主线）** | §0、§1、§2、**§2.6**、§3，然后按 [`four-machine-interconnect.md`](four-machine-interconnect.md) 启动 | 四机流水线推理 |
+> | 自研分层引擎（对照/备用） | §0–§8 全部（§4–§6 是它专用的自检与交接） | 我们自己写 stage runtime 的实验 |
+>
+> 两条路的**系统环境（§1）与代码/模型（§3）是共用的**，只有 Python 环境与启动方式不同：
+> 自研路线用 `~/venvs/pair`（torch cu124）并按 §4 起 agent；
+> **vLLM 路线另建 `~/venvs/vllm`（§2.6）并按互联手册起 Ray + `vllm serve`**。
+>
 > 目标：把一台笔记本变成集群里的**一个算力节点**，能跑通"四段流水线推理"，
 > 并能被控制端调度。
 >
@@ -132,6 +143,59 @@ python -c "import torch;print(torch.__version__, torch.cuda.is_available(), torc
 > | 8.6（Ampere，RTX 30 系） | FA2 + Triton + FlashInfer | int4 + int8（**FP8 基本不可用**） |
 > | 7.5（Turing，GTX 16 系） | **仅 Triton** | int4 Marlin + int8 |
 > | ≥9.0（Hopper+） | FA3/FA4 | FP8/FP4 |
+
+---
+
+## 2.6 【当前主线】vLLM 路线的环境（与上面 §2 并行，另建 venv）
+
+> **2026-09-22 起，执行面改用 vLLM + LMCache**（自研分层引擎的结论保留作对照）。
+> 上面 §2 的 `~/venvs/pair` 是自研引擎路线用的，**vLLM 必须另建 venv**：
+> vLLM 0.30 会拉自己的 **torch 2.13**，装进 `pair` 会把 2.6.0+cu124 换掉。
+
+```bash
+# 2.6.1 先设 pip 缓存到 /mnt/d（ext4.vhdx 只增不减，别让缓存撑大 C 盘）
+export PIP_CACHE_DIR=/mnt/d/pipcache
+mkdir -p "$PIP_CACHE_DIR"
+
+# 2.6.2 独立 venv
+python3 -m venv ~/venvs/vllm
+
+# 2.6.3 ⚠️ 必须显式指定 https 源
+#   本机 /etc/pip.conf 指向 http://mirrors.aliyun.com/pypi/simple/ 且 trusted-host
+#   作用域不覆盖，新版 pip 会忽略它 → 实测**卡在 3MB 不动**。用 https 源：
+IDX=https://pypi.tuna.tsinghua.edu.cn/simple
+~/venvs/vllm/bin/pip install -i $IDX --timeout 60 --retries 5 -U pip setuptools wheel
+~/venvs/vllm/bin/pip install -i $IDX --timeout 60 --retries 5 vllm lmcache
+~/venvs/vllm/bin/pip install -i $IDX --timeout 60 --retries 5 ray
+
+# 2.6.4 网关依赖（只要装在跑网关的那台）
+~/venvs/pair/bin/pip install -i $IDX fastapi uvicorn httpx
+```
+
+**验收**：
+
+```bash
+~/venvs/vllm/bin/python -c "import torch, vllm; print(torch.__version__, torch.cuda.is_available(), vllm.__version__)"
+# 期望：2.13.x True 0.30.x
+ls -l ~/venvs/vllm/bin/vllm
+```
+
+**体积预期**：venv 约 **6–9 GB**（vLLM + torch + CUDA 库），落在**系统盘的 vhdx**里；
+模型另算（0.5B ≈ 1 GB，7B fp16 ≈ 15 GB，7B AWQ ≈ 5 GB）——**放 `/mnt/d`**。
+
+**模型档位（由最小那台的显存决定）**：
+
+| 最小显存 | 用哪个 | 为什么 |
+|---|---|---|
+| ≥ 8 GB | 7B fp16 | 均分 4 段每段 7 层 = 3.26 GB |
+| 6 GB | 7B fp16（少量余量）或 AWQ | 同上但更紧 |
+| **4 GB** | **7B 的 AWQ/GPTQ int4** | fp16 的 7 层 3.26 GB 会 OOM；int4 每层 ≈0.13 GB，7 层 ≈0.9 GB |
+
+```bash
+# 7B 的 int4 版本（vLLM 原生支持，不需要我们自己实现量化）
+python scripts/hf_mirror_download.py --repo Qwen/Qwen2.5-7B-Instruct-AWQ \
+       --dest /mnt/d/models/Qwen2.5-7B-Instruct-AWQ
+```
 
 ---
 

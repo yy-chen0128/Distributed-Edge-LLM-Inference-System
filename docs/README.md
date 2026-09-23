@@ -31,7 +31,8 @@ docs/
 | **project-structure-and-build.md** | **项目结构与构建说明**：三层架构、两条执行轨道、目录职责、关键数据契约、四种运行方式、外部参考实现来源、仓库约定与文档地图 |
 | **four-laptop-integration-plan.md** | 四台笔记本整合计划：OS 决策、GPU 环境、模型选型（含"平均切失败/加权切成功"算例）、优化构件与复用情况、P0–P5 分阶段计划、风险清单 |
 | **edge-4gpu-deployment-analysis.md** | 真实部署实测分析：四段流水线数值正确性、分片足迹、成本模型、节点离开重配置、并发吞吐、异构切层、PP/TP 定量对比、实验方案 |
-| **vllm-lmcache-4node-plan.md** | **vLLM + LMCache 四机推理方案与执行手册**（当前主线）：四条硬约束（PP 启动期定死／官方要求节点环境一致／不按显存加权切分→靠量化适配／仅 Linux）、部署架构（Ray + PP=4 + LMCache connector）、V1–V4 验收标准、档0「气泡重启」可执行流程、未决问题与执行顺序 |
+| **vllm-lmcache-4node-plan.md** | **vLLM + LMCache 四机推理方案与执行手册**（当前主线）：四条硬约束（PP 启动期定死／官方要求节点环境一致／不按显存加权切分→靠量化适配／仅 Linux）、部署架构（Ray + PP=4 + LMCache connector）、V1–V4 验收标准、档0+档1（气泡重启 + 拼接提示词重放）可执行流程与网关实现位置、未决问题与执行顺序 |
+| **four-machine-interconnect.md** | **四机互联手册**：需要你提供什么（四行表格 + 三条权限确认 + 链路实测 JSON）、网络可行性（PP 只需 0.9–3.4 Mbit/s，**瓶颈是延迟不是带宽**）、WSL mirrored 模式的坑与 NCCL 网卡指定、每台要装的差异、端口清单、启动顺序、8 条验收清单（含"TPOT 跨机代价"这个成败判据）、节点脱离演练、故障排查 |
 
 ## design/ — 设计讨论
 
